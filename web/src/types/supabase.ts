@@ -3143,6 +3143,7 @@ export type Database = {
           citation_answers: number
           last_run_at: string
           mention_answers: number
+          platforms: Json
           position_factor: number
           prompt_id: string
           runs: number

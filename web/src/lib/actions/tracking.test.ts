@@ -137,6 +137,88 @@ describe('getInsightsSummary', () => {
   });
 });
 
+describe('getPromptVisibilitySummaries', () => {
+  const summaryRow = {
+    prompt_id: 'prompt-id',
+    avg_visibility: 40,
+    avg_visibility_visible: 80,
+    total_mentions: 6,
+    total_citations: 2,
+    runs: 10,
+    visible_runs: 5,
+    mention_answers: 5,
+    citation_answers: 2,
+    position_factor: 0.5,
+    last_run_at: '2026-10-14T00:00:00.000Z',
+  };
+
+  it("returns each prompt's per-platform position sums from the same row (00146)", async () => {
+    rpcMock = vi.fn(async () => ({
+      data: [
+        {
+          ...summaryRow,
+          platforms: [
+            {
+              platform: 'chatgpt-web',
+              runs: 6,
+              mention_answers: 3,
+              position_sum: 6,
+              position_count: 3,
+              entity_sum: 15,
+              entity_count: 3,
+            },
+            {
+              platform: 'perplexity-web',
+              runs: 4,
+              mention_answers: 2,
+              position_sum: 2,
+              position_count: 2,
+              entity_sum: 10,
+              entity_count: 2,
+            },
+          ],
+        },
+      ],
+      error: null,
+    })) as unknown as typeof rpcMock;
+    const { getPromptVisibilitySummaries } = await import('./tracking');
+
+    const { visibility, positions } = await getPromptVisibilitySummaries('brand-id');
+
+    expect(visibility['prompt-id']).toMatchObject({ runs: 10, visibilityRate: 50 });
+    expect(positions['prompt-id']).toEqual([
+      {
+        platform: 'chatgpt-web',
+        runs: 6,
+        mentionAnswers: 3,
+        positionSum: 6,
+        positionCount: 3,
+        entitySum: 15,
+        entityCount: 3,
+      },
+      {
+        platform: 'perplexity-web',
+        runs: 4,
+        mentionAnswers: 2,
+        positionSum: 2,
+        positionCount: 2,
+        entitySum: 10,
+        entityCount: 2,
+      },
+    ]);
+  });
+
+  it('has no position sums for a database without 00146, and still returns the visibility', async () => {
+    rpcMock = vi.fn(async () => ({ data: [summaryRow], error: null })) as unknown as typeof rpcMock;
+    const { getPromptVisibilitySummaries } = await import('./tracking');
+
+    const { visibility, positions } = await getPromptVisibilitySummaries('brand-id');
+
+    expect(visibility['prompt-id']).toMatchObject({ runs: 10 });
+    expect(positions['prompt-id']).toEqual([]);
+  });
+});
+
 describe('analyzeNewPrompt', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

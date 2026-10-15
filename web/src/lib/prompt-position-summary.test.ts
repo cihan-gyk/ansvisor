@@ -8,6 +8,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildPositionCell,
+  platformPositionRows,
   previousWindow,
   type PlatformPositionRow,
 } from './prompt-position-summary';
@@ -141,6 +142,53 @@ describe('buildPositionCell', () => {
       platforms.slice(0, 2),
     );
     expect(cell.lateOrMissing).toBe(false);
+  });
+});
+
+describe('platformPositionRows', () => {
+  test("reads prompt_visibility_summaries' platforms array", () => {
+    expect(
+      platformPositionRows([
+        {
+          platform: 'chatgpt-web',
+          runs: 120,
+          mention_answers: 8,
+          position_sum: 8,
+          position_count: 8,
+          entity_sum: 40,
+          entity_count: 8,
+        },
+      ]),
+    ).toEqual([
+      {
+        platform: 'chatgpt-web',
+        runs: 120,
+        mentionAnswers: 8,
+        positionSum: 8,
+        positionCount: 8,
+        entitySum: 40,
+        entityCount: 8,
+      },
+    ]);
+  });
+
+  test('is empty when the column is missing, as before 00146 is applied', () => {
+    expect(platformPositionRows(undefined)).toEqual([]);
+    expect(platformPositionRows(null)).toEqual([]);
+  });
+
+  test('skips anything that is not a platform object', () => {
+    expect(platformPositionRows([null, 3, { platform: 'gemini-web', runs: 2 }])).toEqual([
+      {
+        platform: 'gemini-web',
+        runs: 2,
+        mentionAnswers: 0,
+        positionSum: 0,
+        positionCount: 0,
+        entitySum: 0,
+        entityCount: 0,
+      },
+    ]);
   });
 });
 

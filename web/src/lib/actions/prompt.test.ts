@@ -211,13 +211,14 @@ describe('getPromptsPageData', () => {
         ],
       },
     ];
+    // The previous period, from prompt_position_summaries: #3 on average.
     positionData = [
       {
         prompt_id: 'p1',
         platform: 'chatgpt-web',
         runs: 4,
         mention_answers: 4,
-        position_sum: 8,
+        position_sum: 12,
         position_count: 4,
         entity_sum: 20,
         entity_count: 4,
@@ -225,7 +226,23 @@ describe('getPromptsPageData', () => {
     ];
     positionsError = null;
     vi.mocked(getPromptVolumes).mockResolvedValue({ volumes: [], quota: {} as VolumeQuota });
-    vi.mocked(getPromptVisibilitySummaries).mockResolvedValue({});
+    // The window on screen comes with the visibility summaries (00146): #2.
+    vi.mocked(getPromptVisibilitySummaries).mockResolvedValue({
+      visibility: {},
+      positions: {
+        p1: [
+          {
+            platform: 'chatgpt-web',
+            runs: 4,
+            mentionAnswers: 4,
+            positionSum: 8,
+            positionCount: 4,
+            entitySum: 20,
+            entityCount: 4,
+          },
+        ],
+      },
+    });
     // The location quota fails here (no brand row), which the page also absorbs.
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -234,14 +251,16 @@ describe('getPromptsPageData', () => {
     vi.restoreAllMocks();
   });
 
-  it('fills the Positions column from the position summaries', async () => {
+  it("takes the window's positions from the visibility summaries and the trend from the previous period", async () => {
     const page = await getPromptsPageData('b1');
 
     expect(page.positions.p1.avg).toBe(2);
+    // Up from #3 to #2.
+    expect(page.positions.p1.delta).toBe(1);
     expect(page.positions.p1.dots.map((d) => d.id)).toEqual(['chatgpt-web']);
   });
 
-  it('shows — in the Positions column when the position query fails, instead of failing the page', async () => {
+  it('shows — in the Positions column when the previous-period query fails, instead of failing the page', async () => {
     positionsError = 'canceling statement due to statement timeout';
 
     const page = await getPromptsPageData('b1');

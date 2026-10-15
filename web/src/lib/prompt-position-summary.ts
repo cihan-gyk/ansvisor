@@ -3,8 +3,9 @@
  * position over the selected range, its change against the previous period of
  * the same length, and one dot per platform.
  *
- * Pure on purpose: the server action loads per-platform sums
- * (prompt_position_summaries, 00123) and this turns them into the cell. The
+ * Pure on purpose: the server actions load per-platform sums (the window's
+ * from prompt_visibility_summaries, 00146; the previous period's from
+ * prompt_position_summaries, 00123) and this turns them into the cell. The
  * average is the Positions panel's: the mean mention position over the
  * answers that mention the brand, on the plan-included platforms.
  */
@@ -21,6 +22,30 @@ export interface PlatformPositionRow {
   positionCount: number;
   entitySum: number;
   entityCount: number;
+}
+
+/**
+ * One platform's sums from the database: a prompt_position_summaries row
+ * (00123), or an element of prompt_visibility_summaries' `platforms` (00146).
+ */
+export function toPlatformPositionRow(raw: Record<string, unknown>): PlatformPositionRow {
+  return {
+    platform: String(raw.platform ?? ''),
+    runs: Number(raw.runs ?? 0),
+    mentionAnswers: Number(raw.mention_answers ?? 0),
+    positionSum: Number(raw.position_sum ?? 0),
+    positionCount: Number(raw.position_count ?? 0),
+    entitySum: Number(raw.entity_sum ?? 0),
+    entityCount: Number(raw.entity_count ?? 0),
+  };
+}
+
+/** prompt_visibility_summaries' `platforms` array; empty when absent. */
+export function platformPositionRows(json: unknown): PlatformPositionRow[] {
+  if (!Array.isArray(json)) return [];
+  return json
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map(toPlatformPositionRow);
 }
 
 /**

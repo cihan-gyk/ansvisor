@@ -29,6 +29,7 @@ import { getPromptSuggestions } from '@/lib/actions/prompt-suggestions';
 import { aggregatePromptVolumeClusters } from '@/lib/prompt-volume-clusters';
 import { percentageChange } from '@/lib/metrics';
 import { PLATFORM_LABELS } from '@/config/platform-labels';
+import { platformPositionRows, type PlatformPositionRow } from '@/lib/prompt-position-summary';
 import {
   aggregateHeadToHead,
   competitorScoreIn,
@@ -1763,23 +1764,32 @@ export interface PromptVisibilitySummary {
   lastRunAt: string;
 }
 
+export interface PromptSummaries {
+  visibility: Record<string, PromptVisibilitySummary>;
+  /**
+   * Per-platform position sums for the Positions column (PROMPT-007), keyed
+   * by prompt id. They come from the same scan as `visibility` (00146).
+   */
+  positions: Record<string, PlatformPositionRow[]>;
+}
+
 /**
  * Aggregate visibility + mention stats per prompt for a brand, over the
  * last N days (default 30). Used by the All Prompts tab to show a quick
- * health column next to each prompt.
+ * health column next to each prompt, and its Positions column.
  *
  * `region` scopes the aggregate to one tracked location (#691). Without it
  * a multi-location prompt's figures are the blend of everywhere it runs,
  * which hides exactly what tracking several locations was meant to reveal —
  * a prompt can be strong at home and invisible abroad.
  *
- * Returns a map keyed by prompt_id. Prompts without any runs in the window
- * simply won't appear in the map (callers should render "—").
+ * Returns maps keyed by prompt_id. Prompts without any runs in the window
+ * simply won't appear in them (callers should render "—").
  */
 export async function getPromptVisibilitySummaries(
   brandId: string,
   opts?: { days?: number; from?: string; to?: string; region?: string },
-): Promise<Record<string, PromptVisibilitySummary>> {
+): Promise<PromptSummaries> {
   const supabase = await dbClient();
   // `from`/`to` win when given (the custom range, #713); otherwise the day
   // count keeps every existing caller on its previous behaviour.
@@ -1802,6 +1812,7 @@ export async function getPromptVisibilitySummaries(
   if (error) throw new Error(error.message);
 
   const result: Record<string, PromptVisibilitySummary> = {};
+  const positions: Record<string, PlatformPositionRow[]> = {};
   for (const row of data ?? []) {
     const runs = Number(row.runs ?? 0);
     const visibleRuns = Number(row.visible_runs ?? 0);
@@ -1827,8 +1838,9 @@ export async function getPromptVisibilitySummaries(
       positionFactor,
       lastRunAt: row.last_run_at,
     };
+    positions[row.prompt_id] = platformPositionRows(row.platforms);
   }
-  return result;
+  return { visibility: result, positions };
 }
 
 /**

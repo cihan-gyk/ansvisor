@@ -24,6 +24,7 @@ import { POSITION_PLATFORMS, platformAccess } from '@/lib/prompt-positions';
 import {
   buildPositionCell,
   previousWindow,
+  toPlatformPositionRow,
   type PlatformPositionRow,
   type PromptPositionCell,
 } from '@/lib/prompt-position-summary';
@@ -963,17 +964,19 @@ export async function getPromptsPageData(
     from: opts?.from ?? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString(),
     to: opts?.to,
   };
-  const [promptSets, visibility, positionRows, volumesResult, locationQuota] = await Promise.all([
+  const [promptSets, summaries, positionRows, volumesResult, locationQuota] = await Promise.all([
     getPromptSets(brandId),
+    // Also carries the Positions column's sums for this window, from the
+    // same scan (00146).
     getPromptVisibilitySummaries(brandId, {
       days,
       from: opts?.from,
       to: opts?.to,
       region: opts?.region,
     }),
-    // The Positions column scans every answer in the window and the one
-    // before it. A timeout, or the web deploying before 00123 is applied,
-    // shows — in that column instead of failing the table.
+    // The previous period, for the trend, scans its answers separately. A
+    // timeout, or the web deploying before 00123 is applied, shows — in the
+    // Positions column instead of failing the table.
     getPositionRows(brandId, window, opts?.region).catch((err) => {
       console.error('[prompts] position summaries fetch failed, rendering without them:', err);
       return noPositionRows();
@@ -995,7 +998,8 @@ export async function getPromptsPageData(
 
   const positions: Record<string, PromptPositionCell> = {};
   for (const prompt of promptSets.flatMap((ps) => ps.prompts)) {
-    const current = positionRows.current.get(prompt.id) ?? [];
+    // Empty before 00146 is applied, which also reads —.
+    const current = summaries.positions[prompt.id] ?? [];
     // A dot for every included engine the prompt tracks, plus any it has
     // answers from in the window, so the dots and the average agree.
     const platforms = positionRows.included.filter(
@@ -1011,7 +1015,7 @@ export async function getPromptsPageData(
 
   return {
     promptSets,
-    visibility,
+    visibility: summaries.visibility,
     positions,
     volumes: volumesResult.volumes,
     quota: volumesResult.quota,
@@ -1022,19 +1026,19 @@ export async function getPromptsPageData(
 
 interface PositionRows {
   included: { id: string; label: string }[];
-  current: Map<string, PlatformPositionRow[]>;
   previous: Map<string, PlatformPositionRow[]>;
 }
 
 /** No position data: every prompt's Positions cell reads —. */
 function noPositionRows(): PositionRows {
-  return { included: [], current: new Map(), previous: new Map() };
+  return { included: [], previous: new Map() };
 }
 
 /**
- * Per-prompt, per-engine position sums for the Positions column: the window
- * on screen and the period of the same length just before it, for the trend.
- * Only engines the org's plan includes count, as in the Positions panel.
+ * What the Positions column needs besides the window's sums, which come with
+ * the visibility summaries: the engines the org's plan includes (only those
+ * count, as in the Positions panel) and the per-prompt, per-engine sums for
+ * the period of the same length just before the window, for the trend.
  */
 async function getPositionRows(
   brandId: string,
@@ -1049,16 +1053,14 @@ async function getPositionRows(
     .maybeSingle();
   if (!brand?.organization_id) return noPositionRows();
 
-  const before = previousWindow(window);
-  const [plan, current, previous] = await Promise.all([
+  const [plan, previous] = await Promise.all([
     getOrgPlan(brand.organization_id as string),
-    positionSums(brandId, window, region),
-    positionSums(brandId, before, region),
+    positionSums(brandId, previousWindow(window), region),
   ]);
   const included = POSITION_PLATFORMS.filter(
     (p) => platformAccess(plan, p.id).state === 'included',
   ).map((p) => ({ id: p.id as string, label: p.label as string }));
-  return { included, current, previous };
+  return { included, previous };
 }
 
 async function positionSums(
@@ -1078,15 +1080,7 @@ async function positionSums(
   const byPrompt = new Map<string, PlatformPositionRow[]>();
   for (const row of data ?? []) {
     const list = byPrompt.get(row.prompt_id) ?? [];
-    list.push({
-      platform: row.platform,
-      runs: Number(row.runs ?? 0),
-      mentionAnswers: Number(row.mention_answers ?? 0),
-      positionSum: Number(row.position_sum ?? 0),
-      positionCount: Number(row.position_count ?? 0),
-      entitySum: Number(row.entity_sum ?? 0),
-      entityCount: Number(row.entity_count ?? 0),
-    });
+    list.push(toPlatformPositionRow(row));
     byPrompt.set(row.prompt_id, list);
   }
   return byPrompt;
