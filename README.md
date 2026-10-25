@@ -47,7 +47,7 @@ This shift is making [Answer Engine Optimization (AEO)](https://www.ansvisor.com
 
 Instead of treating AI visibility as another isolated analytics dashboard, Ansvisor connects business data, traditional search signals, and AI Search behavior to help teams understand what is happening, discover where opportunities exist, prioritize what matters, and take action.
 
-Agents do the groundwork. They surface opportunities, prepare briefs and drafts, and keep actions moving. People stay in charge of what ships.
+These are AI agents for marketing teams. They surface opportunities, prepare briefs and drafts, and keep actions moving. People stay in charge of what ships.
 
 With Ansvisor, you can:
 
@@ -85,7 +85,7 @@ Ansvisor is built for teams that want transparency, flexibility, and control.
 
 Inspect the code, contribute to the platform, and deploy Ansvisor on your own infrastructure — or use [Ansvisor Cloud](https://www.ansvisor.com/) without managing infrastructure yourself.
 
-Whether you're an enterprise, agency, e-commerce brand, SaaS company, startup, or developer, Ansvisor helps turn business and AI Search data into signals, actions, and tasks designed to improve AI visibility outcomes.
+Whether you're an enterprise, agency, e-commerce brand, SaaS company, startup, or developer, Ansvisor helps turn business and AI Search data into signals, actions, and tasks designed to improve AI visibility outcomes. For marketing teams, that makes it an open-source AI marketing tool built for AI Search.
 
 ---
 
