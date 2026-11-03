@@ -81,6 +81,16 @@ Chat does a task; it never changes what Chat may do, skips an approval or
 publishes anything. After changing one, run `yarn test -u src/lib/chat/skills`
 in `web/` and commit `library.json`, which Chat reads.
 
+### The Library's catalog
+
+`marketplace/SKILLS-CATALOG.csv` lists the third-party skills of Chat's
+Library: the 2026-10-18 import of 945 public skills, of which the 701
+marked Imported are MIT, checked on GitHub, each pinned to a commit. It is
+data, not skills: no `SKILL.md` is kept here. Chat reads the catalog as
+`web/src/lib/chat/skills/marketplace.json` (refresh it with
+`yarn test -u src/lib/chat/skills` in `web/`), and reads a skill's text
+from GitHub at the pinned commit when someone opens or adds it.
+
 ## Which flavour should I install?
 
 | Your client | Recommended |
@@ -162,8 +172,8 @@ you ask for that specific change.
 
 ## Contributing
 
-Every folder under `skills/` other than the two AEO coach flavours is one of
-Chat's Ansvisor skills or shortcut playbooks, and CI checks it as one. So
+Every folder under `skills/` other than the two AEO coach flavours and the
+Library's `marketplace/` catalog is one of Chat's Ansvisor skills or shortcut playbooks, and CI checks it as one. So
 there are two kinds of contribution:
 
 **A skill for Chat.** Ansvisor's own skills are the twenty-one listed above.

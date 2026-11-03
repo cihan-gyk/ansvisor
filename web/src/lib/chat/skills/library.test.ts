@@ -48,6 +48,8 @@ const SKILLS = path.join(REPO, 'skills');
  * /skills is a library skill and is checked.
  */
 const MCP_COACH_SKILLS = ['ansvisor-aeo-coach', 'ansvisor-aeo-coach-standalone'];
+/** The Library's catalog of third-party skills (W4-17, marketplace.test.ts): a CSV, no skill. */
+const NOT_SKILLS = [...MCP_COACH_SKILLS, 'marketplace'];
 
 /**
  * Ansvisor's skills (CHAT-13 v2, "Ansvisor skills (14)"): the v2 mockup's
@@ -185,7 +187,7 @@ function unknownTools(text: string, known: ReadonlySet<string>): string[] {
 const COMPETITORS = /\b(profound|peec|otterly|athena ?hq|scrunch)\b/i;
 
 const allFolders = readdirSync(SKILLS).filter(
-  (entry) => statSync(path.join(SKILLS, entry)).isDirectory() && !MCP_COACH_SKILLS.includes(entry),
+  (entry) => statSync(path.join(SKILLS, entry)).isDirectory() && !NOT_SKILLS.includes(entry),
 );
 const allFiles = allFolders.map((folder) => ({
   folder,
