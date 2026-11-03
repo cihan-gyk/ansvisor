@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { API_BASE_URL } from '@/config/api';
+import { readBrandIntegrations, type BrandIntegration } from '@/lib/brand-integrations';
 import { assertWritable } from '@/lib/subscription-guard';
 
 /** Providers that expose the shared connect / status / disconnect flow. */
@@ -60,8 +61,9 @@ export async function getMerchantCenterOffered(): Promise<boolean> {
  * Deliberately does NOT read the provider's status. That resolves the live
  * state against Composio and re-syncs our row, which costs ~450ms per
  * provider — measured — and made the panel appear well after the suggestions
- * it sits above. This reads the row Composio's own status check maintains,
- * plus the brand's property mapping, in a single query.
+ * it sits above. This reads the sign-in the brand uses (00470,
+ * lib/brand-integrations.ts), which follows the row Composio's own status
+ * check maintains, plus the brand's property mapping.
  *
  * The trade-off is that a connection revoked on Google's side still reads as
  * connected here until Settings runs its authoritative check and rewrites the
@@ -121,30 +123,36 @@ export async function getSuggestionSourceStates(brandId: string): Promise<Sugges
       .limit(1)
       .maybeSingle();
 
-  const [configRes, brandRes, connRes, gscFirst, gaFirst, gscLast, gaLast] = await Promise.all([
-    fetch(`${API_BASE_URL}/api/integrations/config`, {
-      headers: await authHeaders(),
-      cache: 'no-store',
-      signal: AbortSignal.timeout(CONFIG_TIMEOUT_MS),
-    })
-      .then((r) => (r.ok ? (r.json() as Promise<ConfigBody>) : ({} as ConfigBody)))
-      .catch(() => ({}) as ConfigBody),
-    supabase.from('brands').select('gsc_property, ga_property_id').eq('id', brandId).maybeSingle(),
-    supabase.from('integration_connections').select('provider, status'),
-    firstRow('gsc_query_stats'),
-    firstRow('ga_page_stats'),
-    latestRow('gsc_query_stats'),
-    latestRow('ga_page_stats'),
-  ]);
-
-  const connected = new Set(
-    (connRes.data ?? []).filter((r) => r.status === 'connected').map((r) => r.provider),
+  const [configRes, brandRes, integrations, gscFirst, gaFirst, gscLast, gaLast] = await Promise.all(
+    [
+      fetch(`${API_BASE_URL}/api/integrations/config`, {
+        headers: await authHeaders(),
+        cache: 'no-store',
+        signal: AbortSignal.timeout(CONFIG_TIMEOUT_MS),
+      })
+        .then((r) => (r.ok ? (r.json() as Promise<ConfigBody>) : ({} as ConfigBody)))
+        .catch(() => ({}) as ConfigBody),
+      supabase
+        .from('brands')
+        .select('gsc_property, ga_property_id')
+        .eq('id', brandId)
+        .maybeSingle(),
+      // A failed read is "not connected", as the Account's row read was.
+      readBrandIntegrations(supabase, brandId).catch(() => new Map<string, BrandIntegration>()),
+      firstRow('gsc_query_stats'),
+      firstRow('ga_page_stats'),
+      latestRow('gsc_query_stats'),
+      latestRow('ga_page_stats'),
+    ],
   );
+
+  const connected = (provider: IntegrationProvider) =>
+    Boolean(integrations.get(provider)?.connected);
 
   return {
     gsc: {
       configured: Boolean(configRes.googleSearchConsole),
-      connected: connected.has('google-search-console'),
+      connected: connected('google-search-console'),
       mapped: Boolean(brandRes.data?.gsc_property),
       firstDataAt: gscFirst.data?.created_at ?? null,
       lastDataAt: gscLast.data?.created_at ?? null,
@@ -152,7 +160,7 @@ export async function getSuggestionSourceStates(brandId: string): Promise<Sugges
     },
     ga: {
       configured: Boolean(configRes.googleAnalytics),
-      connected: connected.has('google-analytics'),
+      connected: connected('google-analytics'),
       mapped: Boolean(brandRes.data?.ga_property_id),
       firstDataAt: gaFirst.data?.created_at ?? null,
       lastDataAt: gaLast.data?.created_at ?? null,
@@ -280,4 +288,75 @@ export async function setBrandGaProperty(
     .eq('id', brandId);
   if (error) throw new Error(error.message);
   if (propertyId) await startBrandSync('google-analytics', brandId);
+}
+
+// ─── Which brand uses which Google account (BRAND-ACCESS PR 15) ──────────────
+
+/** How a brand reads one Google product: the workspace's account, its own, or none. */
+export type BrandGoogleUse =
+  | { kind: 'none' }
+  | { kind: 'workspace'; connected: boolean }
+  | { kind: 'own'; connected: boolean; label: string | null; sharedWith: number };
+
+export interface BrandGoogleRow {
+  brandId: string;
+  brandName: string;
+  gsc: BrandGoogleUse;
+  ga: BrandGoogleUse;
+}
+
+interface UseRow {
+  brand_id: string;
+  provider: string;
+  account_id: string;
+  account: {
+    label: string | null;
+    status: string;
+    integration_connection_id: string | null;
+  } | null;
+}
+
+/**
+ * Settings › Integrations' overview (§3.3): for each brand the person can
+ * see (RLS), which Google account it reads Search Console and Analytics
+ * from. The demo brand, sample data, isn't listed.
+ */
+export async function getGoogleAccountsOverview(): Promise<BrandGoogleRow[]> {
+  const supabase = await createClient();
+  const [brands, uses] = await Promise.all([
+    supabase
+      .from('brands')
+      .select('id, name')
+      .eq('is_demo', false)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('brand_integrations')
+      .select(
+        'brand_id, provider, account_id, account:integration_accounts!brand_integrations_account_id_fkey(label, status, integration_connection_id)',
+      )
+      .in('provider', ['google-search-console', 'google-analytics']),
+  ]);
+  if (brands.error) throw new Error(brands.error.message);
+  if (uses.error) throw new Error(uses.error.message);
+  const rows = (uses.data ?? []) as unknown as UseRow[];
+  const usersOf = new Map<string, number>();
+  for (const row of rows) usersOf.set(row.account_id, (usersOf.get(row.account_id) ?? 0) + 1);
+  const useOf = (brandId: string, provider: string): BrandGoogleUse => {
+    const row = rows.find((r) => r.brand_id === brandId && r.provider === provider);
+    if (!row?.account) return { kind: 'none' };
+    const connected = row.account.status === 'connected';
+    if (row.account.integration_connection_id) return { kind: 'workspace', connected };
+    return {
+      kind: 'own',
+      connected,
+      label: row.account.label,
+      sharedWith: (usersOf.get(row.account_id) ?? 1) - 1,
+    };
+  };
+  return (brands.data ?? []).map((b) => ({
+    brandId: b.id,
+    brandName: b.name,
+    gsc: useOf(b.id, 'google-search-console'),
+    ga: useOf(b.id, 'google-analytics'),
+  }));
 }
