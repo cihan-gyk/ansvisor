@@ -11,6 +11,7 @@ import { chatAgenticEnabled } from '../flag';
 import { planFactsFromOrgRow, type PlanFacts } from '../plan-facts';
 import { parseTeamRole } from '../precedence';
 import { SHORTCUT_IDS } from '../shortcuts';
+import { RESERVED_SKILL_NAMES } from './reserved-names';
 import { MAX_BYTES, MAX_DESCRIPTION, MAX_NAME, checkSkillFile } from './format';
 import type { GithubRefusalCode } from './github';
 import type { ImportRefusalCode, ParsedImport } from './import';
@@ -92,11 +93,8 @@ export function skillPlanLimit(plan: PlanFacts): number | null {
 /** The library's names: a workspace skill never takes one (its /command would be two). */
 const LIBRARY_NAMES: ReadonlySet<string> = new Set(SKILL_LIBRARY.map((skill) => skill.name));
 
-/**
- * The names a workspace skill never takes: the library's, and the / menu's
- * shortcuts' (W2-09), each a hidden library skill under its /command.
- */
-const RESERVED_NAMES: ReadonlySet<string> = new Set([...LIBRARY_NAMES, ...SHORTCUT_IDS]);
+/** The names a workspace skill never takes (reserved-names.ts: the library's and the shortcuts'). */
+const RESERVED_NAMES = RESERVED_SKILL_NAMES;
 
 // ─── Who may do what ────────────────────────────────────────────────────────
 
@@ -190,7 +188,9 @@ export type SkillRefusalCode =
   | 'import_plan'
   | 'role_review'
   | 'not_pending'
-  | 'blocked';
+  | 'blocked'
+  // The weekly update check (W4-31).
+  | 'no_update';
 
 const REFUSAL_STATUS: Record<SkillRefusalCode, number> = {
   invalid: 400,
@@ -225,6 +225,7 @@ const REFUSAL_STATUS: Record<SkillRefusalCode, number> = {
   role_review: 403,
   not_pending: 409,
   blocked: 409,
+  no_update: 409,
 };
 
 export interface SkillRefusal {
@@ -295,7 +296,7 @@ async function disabledLibrary(organizationId: string): Promise<string[]> {
 }
 
 const LIST_COLUMNS =
-  'id, name, title, description, source, source_url, license, status, visibility, enabled, created_by, created_at, updated_at, scan_json';
+  'id, name, title, description, source, source_url, license, status, visibility, enabled, created_by, created_at, updated_at, scan_json, update_sha';
 const BODY_COLUMNS =
   'id, name, title, description, body, license, compatibility, checksum_sha256, status, visibility, enabled, created_by';
 
@@ -310,6 +311,7 @@ type ListRow = SkillRuleRow & {
   created_at: string;
   updated_at: string;
   scan_json: unknown;
+  update_sha: string | null;
 };
 
 type BodyRow = SkillRuleRow &
@@ -529,6 +531,8 @@ export interface WorkspaceSkillView {
   mine: boolean;
   /** What the scan listed for a reviewer (item 17). */
   warnings: string[];
+  /** Its source has a new SKILL.md an Admin hasn't approved yet (W4-31). */
+  updateAvailable: boolean;
   createdAt: string;
   updatedAt: string;
   can: { toggle: boolean; remove: boolean; share: 'share' | 'request' | null };
@@ -562,6 +566,8 @@ function viewOf(viewer: SkillViewer, row: ListRow): WorkspaceSkillView {
     enabled: row.enabled,
     mine: row.created_by === viewer.userId,
     warnings: warningsOf(row.scan_json),
+    // The weekly check found a new SKILL.md at its source (W4-31).
+    updateAvailable: row.update_sha !== null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     can: {

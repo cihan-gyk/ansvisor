@@ -1401,13 +1401,13 @@ describe('Rewrite the page to these rules', () => {
     expect(writes.find((w) => w.table === 'content_draft_suggestions')).toBeUndefined();
   });
 
-  describe('a rewrite well past its Length: one more pass cuts it', () => {
+  describe('a rewrite past its Length: one more pass cuts it', () => {
     const cutBudget = {
       charge: vi.fn(async () => {}),
       release: vi.fn(async () => {}),
       keep: vi.fn(async () => {}),
     };
-    // A Length of 100 (up to 120): a cut pass past 135.
+    // A Length of 100 (up to 120): a cut pass past 120. The first answer is 199 characters.
     const toLength = (length = 100) => ({
       rules: [{ key: 'length', name: 'Length', detail: `aim: ${length} characters` }],
       sources: { ...input().sources, length },
@@ -1528,6 +1528,33 @@ describe('Rewrite the page to these rules', () => {
       ).toBeUndefined();
     });
 
+    it('cuts a rewrite only a little past its band too (editor test 2026-11-03)', async () => {
+      // A Length of 150 (up to 180): 199 is past it, though within 15% of it.
+      answers(long, short);
+      await run(toLength(150));
+      expect(generateObject).toHaveBeenCalledTimes(2);
+      expect(generateObject.mock.calls[1][0].prompt).toContain(
+        'Its Length is 150 characters, up to 180. Cut it to about 150.',
+      );
+      expect(row().after_text).toContain('Short.');
+    });
+
+    it('cuts to the top of a Length range the person set (editor test 2026-11-03)', async () => {
+      // About 150, 140 to 160: 199 is past it.
+      answers(long, short);
+      await run({
+        rules: [{ key: 'length', name: 'Length', detail: 'aim: 140-160 characters' }],
+        sources: { ...input().sources, length: 150, lengthBand: { min: 140, max: 160 } },
+      });
+      expect(generateObject).toHaveBeenCalledTimes(2);
+      expect(generateObject.mock.calls[0][0].prompt).toContain(
+        'Length: between 140 and 160 characters, about 150.',
+      );
+      expect(generateObject.mock.calls[1][0].prompt).toContain(
+        'Its Length is 150 characters, up to 160. Cut it to about 150.',
+      );
+    });
+
     it('cuts nothing within reach of the Length, or with Length off', async () => {
       answers(long);
       await run(toLength(3000));
@@ -1604,6 +1631,27 @@ describe('the write prompt', () => {
     expect(off).not.toContain('suggest cuts');
     expect(off).not.toContain('characters now');
   });
+
+  it('tells a Length range the person set as one, read against it (editor test 2026-11-03)', () => {
+    const write = (bodyHtml) =>
+      buildWritePrompt({
+        brand,
+        draft: draftRow({ body_html: bodyHtml }),
+        brief: 'No brief.',
+        input: {
+          sources: { length: 5000, lengthBand: { min: 4500, max: 5500 } },
+          rules: [{ key: 'length', name: 'Length' }],
+          textRules: [],
+        },
+        passages: [{ tag: 'p', text: 'Brew it slowly.' }],
+        lockedKeys: new Set(),
+      });
+    // 5,800 is within 20% of 5,000, but past the range.
+    expect(write(`<p>${'x'.repeat(5800)}</p>`)).toContain(
+      'Length: between 4500 and 5500 characters, about 5000. The page is about 5800 characters now, over its Length: suggest cuts',
+    );
+    expect(write(`<p>${'x'.repeat(5000)}</p>`)).toContain('keep it about this long');
+  });
 });
 
 describe('lengthNow', () => {
@@ -1612,6 +1660,10 @@ describe('lengthNow', () => {
     expect(lengthNow(3600, 3000)).toMatch(/keep it about this long/);
     expect(lengthNow(2400, 3000)).toMatch(/keep it about this long/);
     expect(lengthNow(2399, 3000)).toMatch(/under its Length: add what/);
+    // A range the person set, in place of the band.
+    expect(lengthNow(5501, 5000, { min: 4500, max: 5500 })).toMatch(/over its Length/);
+    expect(lengthNow(4499, 5000, { min: 4500, max: 5500 })).toMatch(/under its Length/);
+    expect(lengthNow(4500, 5000, { min: 4500, max: 5500 })).toMatch(/keep it about this long/);
   });
 });
 

@@ -54,6 +54,7 @@ const own = (over: Partial<WorkspaceSkillView> = {}): WorkspaceSkillView => ({
   enabled: true,
   mine: true,
   warnings: [],
+  updateAvailable: false,
   createdAt: '2026-11-01T10:00:00.000Z',
   updatedAt: '2026-11-01T10:00:00.000Z',
   can: { toggle: true, remove: true, share: 'request' },
@@ -302,8 +303,22 @@ describe('ChatSkills', () => {
       '/dashboard/chat/skills/aaaaaaaa-0000-4000-8000-000000000002',
     );
     expect(inCard('board-update', 'skills.review')).toBeNull();
+    expect(container.querySelector('[data-slot="update-available"]')).toBeNull();
     // No filter chips here: workspace skills have none.
     expect(container.querySelector('[data-action="skills.filter"]')).toBeNull();
+  });
+
+  it('marks an import whose source has a new version, and opens its update (W4-31)', async () => {
+    const copy = list.skills.find((skill) => skill.name === 'copy-editing')!;
+    Object.assign(copy, { status: 'approved', enabled: true, updateAvailable: true });
+    await render();
+    await click(container.querySelector<HTMLElement>('[data-tab="mine"]')!);
+    expect(card('copy-editing').querySelector('[data-slot="update-available"]')!.textContent).toBe(
+      'Update available',
+    );
+    expect(inCard('copy-editing', 'skills.reviewUpdate')!.getAttribute('href')).toBe(
+      '/dashboard/chat/skills/aaaaaaaa-0000-4000-8000-000000000002/update',
+    );
   });
 
   it('opens a skill’s details: Ask an Admin to share, and Delete after a second click', async () => {
@@ -354,10 +369,11 @@ describe('ChatSkills', () => {
     await click(container.querySelector<HTMLElement>('[data-action="skills.newSkill"]')!);
     const items = all('[role="menuitem"]', document.body);
     expect(items.map((item) => item.textContent)).toEqual([
+      'Create in Chat',
       'Upload a SKILL.md or .zip',
       'Import from GitHub',
     ]);
-    await click(items[1]);
+    await click(items[2]);
     const dialog = document.querySelector<HTMLElement>('[data-slot="import-skill"]')!;
     expect(dialog.textContent).toContain('Import a skill from GitHub');
     const input = dialog.querySelector<HTMLInputElement>('[data-action="skills.importUrl"]')!;
@@ -370,6 +386,15 @@ describe('ChatSkills', () => {
     });
     await click(dialog.querySelector<HTMLElement>('[data-action="skills.importSubmit"]')!);
     expect(nav.push).toHaveBeenCalledWith('/dashboard/chat/skills/new-1');
+  });
+
+  it('creates a skill in Chat from New skill: Chat Home with "Create a skill that " in the box (W3-08)', async () => {
+    await render();
+    await click(container.querySelector<HTMLElement>('[data-action="skills.newSkill"]')!);
+    await click(all('[data-action="skills.create"]', document.body)[0]);
+    expect(nav.push).toHaveBeenCalledWith(
+      `/dashboard/chat?${new URLSearchParams({ compose: 'Create a skill that ' })}`,
+    );
   });
 
   it('offers New skill only to those who may save skills', async () => {

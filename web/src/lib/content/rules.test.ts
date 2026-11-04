@@ -18,6 +18,10 @@ import {
   draftRulesSchema,
   readPage,
   ruleLength,
+  ruleLengthBand,
+  lengthCapFor,
+  lengthSpan,
+  lengthRangeValue,
   wordsForLength,
   lengthWarns,
   lengthConflict,
@@ -211,6 +215,52 @@ describe('length and structure', () => {
       min: 2400,
       max: 3600,
     });
+  });
+
+  it('reads a Length range as set: met within it, aimed at its middle (editor test 2026-11-03)', () => {
+    const range = rule('length', 'feature_page', '4500-5500');
+    expect(checkRule(range, page('', 4500), ctx)).toEqual({ state: 'ok' });
+    expect(checkRule(range, page('', 5500), ctx)).toEqual({ state: 'ok' });
+    // Within the band around its middle (5,000 ± 20%), but not the range.
+    expect(checkRule(range, page('', 5900), ctx)).toEqual({
+      state: 'bad',
+      code: 'long',
+      count: 5900,
+      min: 4500,
+      max: 5500,
+    });
+    expect(checkRule(range, page('', 4200), ctx)).toMatchObject({ code: 'short', min: 4500 });
+    expect(ruleLength([range], 'feature_page')).toBe(5000);
+    expect(ruleLengthBand([range])).toEqual({ min: 4500, max: 5500 });
+    // One number: the agent aims at it, as before.
+    expect(ruleLengthBand([rule('length', 'feature_page', '3000')])).toBeUndefined();
+    expect(ruleLengthBand([{ ...range, on: false }])).toBeUndefined();
+  });
+
+  it('gives a Fix the page’s characters and the most its Length allows (editor UX review 2026-11-03)', () => {
+    const at = (value: string, on = true) => [
+      { rule: { ...rule('length', 'feature_page', value), on } },
+    ];
+    expect(lengthCapFor(at('800'), 2706.4)).toEqual({ count: 2706, max: 960 });
+    expect(lengthCapFor(at('4500-5500'), 4000)).toEqual({ count: 4000, max: 5500 });
+    // Off, or no Length to read: none.
+    expect(lengthCapFor(at('800', false), 2706)).toBeUndefined();
+    expect(lengthCapFor(at('0'), 2706)).toBeUndefined();
+    expect(lengthCapFor([], 2706)).toBeUndefined();
+  });
+
+  it('parses a Length as one number or a range, as typed', () => {
+    expect(lengthSpan('5000')).toEqual({ target: 5000, min: 4000, max: 6000 });
+    expect(lengthSpan('4500-5500')).toEqual({ target: 5000, min: 4500, max: 5500 });
+    expect(lengthSpan('4.500–5.500')).toEqual({ target: 5000, min: 4500, max: 5500 });
+    expect(lengthSpan('4,500 - 5,500')).toEqual({ target: 5000, min: 4500, max: 5500 });
+    // The larger first is read the right way round; one bound alone is a range of one.
+    expect(lengthSpan('5500-4500')).toEqual({ target: 5000, min: 4500, max: 5500 });
+    expect(lengthSpan('5000-5000')).toEqual({ target: 5000, min: 5000, max: 5000 });
+    for (const bad of ['', '0', 'many', '4500-', '-5500', '0-5000', '1-2-3']) {
+      expect(lengthSpan(bad)).toBeNull();
+    }
+    expect(lengthRangeValue(5500, 4500)).toBe('4500-5500');
   });
 
   it('wants one H1 per page, and leaves the agent out of it', () => {
@@ -1057,6 +1107,7 @@ describe('rewriteAdvice', () => {
     expect(lengthOutOfReach(page, floor)).toEqual({
       count: 6_877,
       target: 4_000,
+      max: 4_800,
       kept: 3_799,
       why: 'floor',
       least: 5_100,
@@ -1128,7 +1179,9 @@ describe('rewriteAdvice', () => {
       suggested: 6_500,
     });
     // Never a Length past the page as it is.
-    expect(lengthOutOfReach(statuses(4_900, [], '4000'), run)?.suggested).toBe(5_000);
+    expect(lengthOutOfReach(statuses(4_900, [], '4000'), { ...run, floor: 5_100 })?.suggested).toBe(
+      5_000,
+    );
     // Rewritten with its cited passages too (it kept less): still missing says keeping them misses too…
     const citedToo = { ...run, last: { chars: 5_200, target: 4_000, kept: 0 } };
     expect(lengthOutOfReach(page, citedToo)).toMatchObject({ why: 'reached', least: 5_200 });
@@ -1140,6 +1193,23 @@ describe('rewriteAdvice', () => {
         last: { ...citedToo.last, chars: 4_500 },
       }),
     ).toMatchObject({ why: 'floor', least: 5_000 });
+  });
+
+  it('rewrites again from a page that took the last rewrite, missed or not (editor test 2026-11-03)', () => {
+    // A rewrite for 4,000 came to 5,468 and was accepted: the page is that long now.
+    const run = { kept: 3_125, floor: 4_300, last: { chars: 5_468, target: 4_000, kept: 3_125 } };
+    expect(lengthOutOfReach(statuses(5_468, [], '4000'), run)).toBeNull();
+    // A little edited since, or shorter: still rewritten from there.
+    expect(lengthOutOfReach(statuses(5_600, [], '4000'), run)).toBeNull();
+    expect(lengthOutOfReach(statuses(5_000, [], '4000'), run)).toBeNull();
+    // 30% off or more: a rewrite is recommended again.
+    expect(rewriteAdvice(statuses(5_468, [], '4000'), run)).toMatchObject({ reason: 'length' });
+    // From a page still well past what it came to (it was rejected): another won't get further.
+    expect(lengthOutOfReach(statuses(5_800, [], '4000'), run)).toMatchObject({ why: 'reached' });
+    // The estimate still holds a page whose kept blocks and headings are past the Length.
+    expect(lengthOutOfReach(statuses(5_468, [], '4000'), { ...run, floor: 5_100 })).toMatchObject({
+      why: 'floor',
+    });
   });
 
   it('names what a rewrite keeps as why it missed only when that alone puts the Length out of reach', () => {
