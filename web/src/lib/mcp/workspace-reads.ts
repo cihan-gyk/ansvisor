@@ -1,4 +1,5 @@
-import { allowedBrands, brandAccessFor } from '@/lib/brand-access';
+import { allowedBrands, brandAccessFor, readMemberBrandAccess } from '@/lib/brand-access';
+import { readBrandIntegrations } from '@/lib/brand-integrations';
 import type { McpAuthContext } from '@/lib/mcp-auth';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { readMemberEmails } from '@/lib/member-emails';
@@ -9,8 +10,8 @@ import {
   CONNECTION_TOOLS,
   connectionRecords,
   connectionToolName,
-  readSignIns,
   type ConnectionRecord,
+  type SignInRow,
 } from '@/lib/chat/connections';
 import { planFactsOf } from './chat-facts';
 import { merchantCenterOffered } from './product-visibility';
@@ -36,18 +37,57 @@ export async function listMembersFor(auth: McpAuthContext) {
     .order('created_at', { ascending: true });
   if (error) throw new Error(error.message);
   const rows = data ?? [];
-  const emails = auth.role === 'admin' ? await readMemberEmails(rows.map((r) => r.id)) : null;
+  const isAdmin = auth.role === 'admin';
+  const [emails, access, brands] = await Promise.all([
+    isAdmin ? readMemberEmails(rows.map((r) => r.id)) : null,
+    readMemberBrandAccess(auth.organizationId),
+    supabaseAdmin
+      .from('brands')
+      .select('id, name')
+      .eq('organization_id', auth.organizationId)
+      .eq('is_demo', false)
+      .order('created_at', { ascending: true }),
+  ]);
+  if (brands.error) throw new Error(brands.error.message);
+  const brandOrder = (brands.data ?? []) as { id: string; name: string }[];
   return {
-    members: rows.map((row) => ({
-      name: row.full_name?.trim() || null,
-      role: row.role,
-      // Every member uses every brand of the workspace for now (P0 decision 7).
-      brand_access: 'all' as const,
-      is_you: row.id === auth.userId,
-      ...(emails ? { email: emails.get(row.id) ?? null } : {}),
-    })),
+    members: rows.map((row) => {
+      const member = access.get(row.id);
+      const isYou = row.id === auth.userId;
+      const selected = member?.scope === 'selected';
+      // As Settings › Roles & access shows it: which brands an admin shared
+      // with someone is for admins and the person themselves to see.
+      const shared = selected && (isAdmin || isYou) ? new Set(member.brandIds) : null;
+      return {
+        name: row.full_name?.trim() || null,
+        role: row.role,
+        brand_access: selected ? ('selected' as const) : ('all' as const),
+        ...(shared
+          ? { brands: brandOrder.filter((b) => shared.has(b.id)).map((b) => b.name) }
+          : {}),
+        is_you: isYou,
+        ...(emails ? { email: emails.get(row.id) ?? null } : {}),
+      };
+    }),
     data_as_of: now(),
   };
+}
+
+/**
+ * The Google sign-ins a brand uses (00470, lib/brand-integrations.ts), as
+ * the connection records take them: the connected ones only. Who connected
+ * one and when aren't kept per brand, and this read doesn't list them.
+ */
+async function brandSignIns(brandId: string): Promise<SignInRow[]> {
+  const integrations = await readBrandIntegrations(supabaseAdmin, brandId);
+  return [...integrations.values()]
+    .filter((integration) => integration.connected)
+    .map((integration) => ({
+      provider: integration.provider,
+      status: integration.status,
+      connected_by: null,
+      created_at: null,
+    }));
 }
 
 /**
@@ -57,11 +97,13 @@ export async function listMembersFor(auth: McpAuthContext) {
  * tools with their account and access, the ones whose sign-in failed, and
  * the ones it could connect; the tools coming soon; the workspace's AI
  * provider keys (whether set, never the key) and the person's own API keys.
+ * A Google tool's sign-in is the one the brand uses (brand_integrations,
+ * 00470), not the Account's row.
  */
 export async function listConnectionsFor(auth: McpAuthContext) {
   if (!auth.organizationId) return null;
   const orgId = auth.organizationId;
-  const [brands, aiKeys, access, keys, signIns, offered] = await Promise.all([
+  const [brands, aiKeys, access, keys, offered] = await Promise.all([
     supabaseAdmin.from('brands').select('id, name').eq('organization_id', orgId),
     supabaseAdmin
       .from('organization_ai_keys')
@@ -74,21 +116,23 @@ export async function listConnectionsFor(auth: McpAuthContext) {
       .select('name, last_used_at')
       .eq('user_id', auth.userId)
       .is('revoked_at', null),
-    readSignIns(orgId),
     merchantCenterOffered(),
   ]);
   for (const read of [brands, aiKeys, keys]) {
     if (read.error) throw new Error(read.error.message);
   }
   const brandRows = allowedBrands(access, brands.data ?? []);
-  const rows = await readConnectionRows(brandRows.map((b) => b.id));
+  const [rows, signIns] = await Promise.all([
+    readConnectionRows(brandRows.map((b) => b.id)),
+    Promise.all(brandRows.map((b) => brandSignIns(b.id))),
+  ]);
   const named = (list: ConnectionRecord[], status: ConnectionRecord['status']) =>
     list.filter((r) => r.status === status).map((r) => connectionToolName(r.key));
   return {
-    brands: brandRows.map((b) => {
+    brands: brandRows.map((b, i) => {
       const records = connectionRecords({
         rows: rows.get(b.id) ?? NO_CONNECTION_ROWS,
-        signIns,
+        signIns: signIns[i],
         merchantCenterOffered: offered,
       });
       return {
