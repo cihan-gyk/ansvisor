@@ -44,7 +44,9 @@ import {
 } from './engine';
 import { OPEN_RUN_STATUSES, loadRun, type LoadedRun } from './engine-store';
 import { chatAgenticEnabled } from './flag';
+import { resolveAgentNeedsYou, tellAgentNeedsYou } from './agent-needs-you';
 import { openHeadlessRun } from './headless-run';
+import { callScopeOf, callableAgentsOf, type CallScope } from './agent-calls';
 
 /**
  * The agent run driver (CHAT-21 §H, CHAT-27 §E; W2-16): runs a started
@@ -107,7 +109,7 @@ export const FAILURES_TO_PAUSE = 3;
 const AGENT_RUN_COLUMNS =
   'id, organization_id, agent_id, agent_version, brand_id, trigger_kind, trigger_ref, acting_user_id, status, evidence_json, action_id, queued_at, started_at';
 const VERSION_COLUMNS =
-  'agent_id, version, skill_ids, instructions, mode, connections, model, effort, scope, notify_user_ids, followup_days';
+  'agent_id, version, skill_ids, instructions, mode, connections, model, effort, scope, notify_user_ids, followup_days, can_call';
 
 /** The agent run statuses a run holds its place in (00419's chat_agent_runs_active_uidx). */
 const HELD = ['running', 'needs_you', 'paused_cap'];
@@ -138,6 +140,17 @@ async function readAgentRun(id: string): Promise<AgentRunRow | null> {
     .maybeSingle();
   if (error) throw new Error(`Could not read the agent run: ${error.message}`);
   return (data as AgentRunRow | null) ?? null;
+}
+
+/** Whether the brand is the demo brand (00380), whose sample agent runs nothing settles. */
+async function onDemoBrand(brandId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from('brands')
+    .select('is_demo')
+    .eq('id', brandId)
+    .maybeSingle();
+  if (error) throw new Error(`Could not read the agent run's brand: ${error.message}`);
+  return (data as { is_demo?: boolean } | null)?.is_demo === true;
 }
 
 /**
@@ -236,6 +249,10 @@ export function agentRunMessage(input: {
   action?: ActionSnapshot | null;
   /** The Optional connections the brand lacks, by key. */
   missing?: readonly string[];
+  /** Another agent's run called it (CHAT-27 phase 2): that agent; what it asks is in the scope. */
+  call?: CallScope | null;
+  /** The agents it may run with run_agent, by name (their ids are in the scope). */
+  callable?: readonly { name: string }[];
 }): string {
   const signals = input.evidence.fires.filter((f) => f.kind === 'signal').length;
   const lines = [
@@ -260,7 +277,12 @@ export function agentRunMessage(input: {
     lines.push(runnerT('notConnected', { name: connectionName(key) }));
   }
   if (input.instructions) lines.push(runnerT('instructions', { text: input.instructions }));
-  if (isTriggered(input.triggerKind)) lines.push(runnerT('background'));
+  if (input.call) lines.push(runnerT('calledBy', { agent: input.call.agent }));
+  if (input.callable?.length) {
+    lines.push(runnerT('canCall', { agents: input.callable.map((a) => a.name).join(', ') }));
+  }
+  // Nobody watches a triggered run, nor one another agent called.
+  if (isTriggered(input.triggerKind) || input.call) lines.push(runnerT('background'));
   return lines.join('\n\n');
 }
 
@@ -273,7 +295,14 @@ const MAX_CHIPS = 12;
  * and id, a schedule's slot), and how many earlier fires came with it.
  */
 function runScope(
-  input: { agent: string; brand: string; triggerKind: string; action?: ActionSnapshot | null },
+  input: {
+    agent: string;
+    brand: string;
+    triggerKind: string;
+    action?: ActionSnapshot | null;
+    call?: CallScope | null;
+    callable?: readonly { id: string; name: string }[];
+  },
   evidence: AgentEvidence,
   withIds: boolean,
 ) {
@@ -337,7 +366,14 @@ function runScope(
           },
         }
       : {};
-  return { context: { route: '/dashboard/agents', chips }, ...onAction };
+  // What the calling agent asks, as data (CHAT-27 phase 2), and the agents it may run, by id.
+  const onCall =
+    withIds && input.call ? { call: { agent: input.call.agent, ask: input.call.ask } } : {};
+  const canCall =
+    withIds && input.callable?.length
+      ? { can_call: input.callable.map((a) => ({ agent_id: a.id, name: a.name })) }
+      : {};
+  return { context: { route: '/dashboard/agents', chips }, ...onAction, ...onCall, ...canCall };
 }
 
 /**
@@ -428,11 +464,17 @@ export async function openAgentRun(
 
   const evidence = evidenceOf(run.evidence_json);
   const timezone = validTimezone(evidence.fires.find((f) => f.timezone)?.timezone);
+  // Called by another agent's run (CHAT-27 phase 2): in the stricter mode, that run's ask as data.
+  const call = run.trigger_kind === 'agent' ? callScopeOf(run.evidence_json) : null;
+  // The agents it may run (none for a called run: no chains).
+  const callable = call ? [] : await callableAgentsOf(run.id);
   const words = {
     agent: agent.row.name,
     brand: brand.name,
     triggerKind: run.trigger_kind,
     action,
+    call,
+    callable,
   };
   const text = agentRunMessage({
     ...words,
@@ -459,16 +501,17 @@ export async function openAgentRun(
     message: { text, context: runScope(words, evidence, false) as unknown as Json },
     timezone,
     brandId: brand.id,
-    mode: version.mode,
-    // The agent's model preference and effort (CHAT-16): the engine picks Auto's models today.
+    mode: call ? call.mode : version.mode,
+    // The agent's model and effort (CHAT-16): the engine runs them as the plan allows (W4-03).
     model: version.model,
     effort: version.effort,
     // Started already: the agent's slot (chat_start_next_agent_run) is its place in line.
     status: 'running',
     progress: {
       scope: runScope(words, evidence, true),
-      // An action's title and tasks may come from outside: every change is a card (§16a).
-      ...(action ? { tainted: true, scopeUntrusted: true } : {}),
+      // An action's title and tasks, or another agent's ask, may come from outside: every
+      // change is a card (§16a).
+      ...(action || call ? { tainted: true, scopeUntrusted: true } : {}),
     },
     now,
   });
@@ -692,6 +735,9 @@ export async function settleAgentRun(
 ): Promise<string | null> {
   const run = await readAgentRun(agentRunId);
   if (!run || !HELD.includes(run.status)) return run?.status ?? null;
+  // The demo brand's sample runs (00475) stand as the demo built them: none has a
+  // Chat run to follow, and nothing ends, counts or pauses on their account.
+  if (run.brand_id && (await onDemoBrand(run.brand_id))) return run.status;
 
   const chatRunId = await chatRunOf(run.id);
   // Its action closed while its Chat run still works or waits (edge case 7). Not
@@ -735,6 +781,10 @@ export async function settleAgentRun(
   ) {
     return (await readAgentRun(run.id))?.status ?? null;
   }
+  // Waiting for its person: an e-mail by their "Notify me when an agent needs me", once a
+  // run (00474); going on or ending closes its notice.
+  if (target.status === 'needs_you') await tellAgentNeedsYou(run.organization_id, run.id);
+  else if (run.status === 'needs_you') await resolveAgentNeedsYou(run.id);
 
   if (run.agent_id) {
     // The month's AI limit (not the run's own cap) pauses the agent until it resets (§L item 55).
