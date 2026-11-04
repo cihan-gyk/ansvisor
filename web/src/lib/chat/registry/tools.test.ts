@@ -117,6 +117,9 @@ vi.mock('@/lib/actions/prompt-suggestions', () => ({
 vi.mock('@/lib/actions/chat-schedules', () => ({
   createChatSchedule: tracked.track('actions/chat-schedules.createChatSchedule'),
 }));
+vi.mock('@/lib/actions/chat-agent-calls', () => ({
+  runAgentFromChat: tracked.track('actions/chat-agent-calls.runAgentFromChat'),
+}));
 vi.mock('@/lib/actions/chat-access-requests', () => ({
   requestAccess: tracked.track('actions/chat-access-requests.requestAccess'),
 }));
@@ -169,6 +172,8 @@ const SESSION_FREE = [
   'update_opportunity',
   'dismiss_prompt_suggestion',
   'create_action',
+  // An agent's Ready for review in Full auto (owner decision 2026-11-03).
+  'set_task_ready_for_review',
   'update_draft',
 ];
 /** A run's place, as runLoggedWrite gives a write. */
@@ -723,6 +728,8 @@ describe('approval policies', () => {
       // Memory (W3-11, CHAT-14 item 25): every role has its Me; the store checks the scope.
       save_memory: ['admin', 'manager', 'analyst', 'agency_partner'],
       forget_memory: ['admin', 'manager', 'analyst', 'agency_partner'],
+      // An agent running another agent (CHAT-27 phase 2): Admins and Managers, as agents are.
+      run_agent: ['admin', 'manager'],
     });
     for (const tool of CHAT_TOOLS.filter((t) => t.class === 'read')) {
       expect(allowedRoles(tool)).toEqual(['admin', 'manager', 'analyst', 'agency_partner']);
@@ -1070,7 +1077,11 @@ describe("the model's tool list on the registry's rows", () => {
       'request_access',
       ...memory,
     ]);
-    expect(list('manager', starter)).toEqual([...withoutShopping, ...writes]);
+    // Running another agent is Growth and up (CHAT-27 decision 4).
+    expect(list('manager', starter)).toEqual([
+      ...withoutShopping,
+      ...writes.filter((name) => name !== 'run_agent'),
+    ]);
     expect(list('admin', growth)).toEqual([...reads, ...writes]);
     expect(list('analyst', facts(null, false))).toEqual([
       ...reads,
@@ -1096,5 +1107,80 @@ describe("the model's tool list on the registry's rows", () => {
       'save_memory',
       'forget_memory',
     ]);
+  });
+});
+
+describe("save_skill's draft card (W3-08)", () => {
+  const tool = () => chatTool('save_skill')!;
+  const ctx = {
+    timezone: 'UTC',
+    organizationId: 'org-1',
+    // W3-12a's card context carries who it is for too.
+    userId: 'user-1',
+    now: new Date('2026-11-02T10:00:00Z'),
+  };
+  const input = {
+    name: 'pricing-faq',
+    description: 'Writes a pricing FAQ in our tone.',
+    instructions: 'Read the pricing page. Answer each question in two sentences.',
+  };
+
+  it('is a card in every mode: nothing is kept before Save', () => {
+    expect(tool().flags.alwaysCard).toBe(true);
+    expect([tool().defaultPolicy, tool().maxPolicy]).toEqual(['ask', 'ask']);
+  });
+
+  it('shows the draft as editable fields, with Save skill and what it can’t change', async () => {
+    const form = await tool().form!.fields(input as never, ctx);
+    expect(form).toMatchObject({ kind: 'skill', submit: 'Save skill' });
+    expect(form.fields.map((f) => [f.name, f.kind, f.value])).toEqual([
+      ['name', 'text', 'pricing-faq'],
+      ['title', 'text', 'pricing faq'],
+      ['description', 'textarea', 'Writes a pricing FAQ in our tone.'],
+      ['instructions', 'textarea', 'Read the pricing page. Answer each question in two sentences.'],
+    ]);
+    expect(form.notes).toEqual([
+      'Private to you until an Admin shares it.',
+      'It shapes how Chat works: it adds no tool and skips no card.',
+    ]);
+  });
+
+  it('saves the draft as the card was edited, and refuses a /name it can’t keep', () => {
+    const apply = (values: Record<string, string>) =>
+      tool().form!.apply(input as never, values, ctx);
+    expect(
+      apply({
+        name: ' /Pricing-Brief ',
+        title: 'Pricing brief',
+        description: ' Opens with the answer. ',
+        instructions: 'Answer first, then three sections.',
+      }),
+    ).toEqual({
+      ok: true,
+      input: {
+        name: 'pricing-brief',
+        title: 'Pricing brief',
+        description: 'Opens with the answer.',
+        instructions: 'Answer first, then three sections.',
+      },
+    });
+    // An empty title falls back to the name.
+    expect(apply({ title: '' })).toMatchObject({ ok: true, input: { title: undefined } });
+    expect(apply({ name: 'pricing faq' })).toEqual({
+      ok: false,
+      error: 'Use lowercase letters, digits and single hyphens, such as pricing-faq.',
+    });
+    expect(apply({ name: 'winback' })).toEqual({
+      ok: false,
+      error: '/winback is an Ansvisor skill or shortcut. Pick another name.',
+    });
+  });
+
+  it('says it was saved on its step, and nothing when it wasn’t', () => {
+    expect(tool().doneStep!(input as never, { ok: true, value: { id: 's1' } })).toEqual({
+      label: 'Saved skill: /pricing-faq',
+      detail: 'Private to you · Skills › My skills',
+    });
+    expect(tool().doneStep!(input as never, { ok: false })).toBeNull();
   });
 });

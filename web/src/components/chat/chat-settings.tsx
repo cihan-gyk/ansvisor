@@ -8,10 +8,12 @@ import { saveChatFocus, saveChatGeneralSettings } from '@/lib/actions/chat-prefs
 import { track } from '@/lib/analytics';
 import { FOCUS_AREAS, type FocusArea } from '@/lib/chat/focus';
 import type {
+  AnswerLanguage,
   ChatGeneralAccess,
   ChatGeneralSettings,
   GeneralPatch,
 } from '@/lib/chat/general-settings';
+import { PAGE_OPENS } from '@/lib/chat/page-open';
 import type { ChatMode } from '@/lib/chat/precedence';
 import { cn } from '@/lib/utils';
 import { useFocusLabel } from './focus-picker';
@@ -27,6 +29,11 @@ import { useFocusLabel } from './focus-picker';
  */
 
 const MODES: ChatMode[] = ['ask_first', 'auto', 'full_auto'];
+/** general-settings.ts ANSWER_LANGUAGES, in the order the list shows them. */
+const LANGUAGES: AnswerLanguage[] = ['en', 'tr', 'de', 'fr', 'es', 'it', 'pt', 'nl'];
+
+const SELECT =
+  'h-7 rounded-lg border bg-background px-2 text-[12.5px] text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50';
 
 /** One setting (mockup `.srow2`): its name and a muted line, the control on the right. */
 function Row({ label, note, children }: { label: string; note: string; children: ReactNode }) {
@@ -224,10 +231,30 @@ export function ChatSettings({
             </span>
           </Row>
 
-          {/* Answer language, "Notify me when an agent needs me" and "Show Thought
-              for N s" are kept on the person but nothing reads them yet (Chat
-              answers in the question's language), so they stay hidden until
-              they're wired up; their saved values and schema stay. */}
+          <Row label={t('language.label')} note={t('language.note')}>
+            <select
+              data-action="chatSettings.answerLanguage"
+              aria-label={t('language.label')}
+              value={settings.answerLanguage ?? ''}
+              onChange={(event) =>
+                void change({
+                  answerLanguage: (event.target.value || null) as AnswerLanguage | null,
+                })
+              }
+              className={SELECT}
+            >
+              <option value="">{t('language.same')}</option>
+              {LANGUAGES.map((language) => (
+                <option key={language} value={language}>
+                  {t(`language.${language}`)}
+                </option>
+              ))}
+            </select>
+          </Row>
+
+          {/* "Notify me when an agent needs me" and "Show Thought for N s" are
+              kept on the person but nothing reads them yet, so they stay hidden
+              until they're wired up; their saved values and schema stay. */}
 
           <Row label={t('everyPage.label')} note={t('everyPage.note')}>
             <Switch
@@ -236,6 +263,38 @@ export function ChatSettings({
               action="chatSettings.toggleAskChatEverywhere"
               onChange={(next) => void change({ panelOnPages: next })}
             />
+          </Row>
+
+          {/* Where a page Chat writes opens (CHAT-25 §3, W4-11): "Open here" comes with W4-15. */}
+          <Row label={t('pageOpen.label')} note={t('pageOpen.note')}>
+            <span
+              role="radiogroup"
+              aria-label={t('pageOpen.label')}
+              className="inline-flex shrink-0 rounded-[9px] border bg-muted/60 p-0.5"
+            >
+              {PAGE_OPENS.map((where) => {
+                const on = settings.pageOpen === where;
+                return (
+                  <button
+                    key={where}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    data-action="chatSettings.pageOpen"
+                    onClick={() => {
+                      if (!on) void change({ pageOpen: where });
+                    }}
+                    className={cn(
+                      'inline-flex items-center rounded-[7px] px-[9px] py-[3px] text-xs whitespace-nowrap text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                      on &&
+                        'bg-background font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,.08)]',
+                    )}
+                  >
+                    {t(`pageOpen.${where}`)}
+                  </button>
+                );
+              })}
+            </span>
           </Row>
         </section>
       </div>

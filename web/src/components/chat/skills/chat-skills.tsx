@@ -150,7 +150,8 @@ export function ChatSkills() {
     const started = await startChatRun(`/${name}`, brandId ?? null);
     if (!started.ok) {
       setStarting(null);
-      if (started.code === 'subscription_inactive') openUpgrade();
+      // A read-only workspace, or a skill run on the demo brand: the plans.
+      if (started.code === 'subscription_inactive' || started.code === 'demo_brand') openUpgrade();
       else toast.error(started.error ?? t('runFailed'));
       return;
     }
@@ -212,7 +213,7 @@ export function ChatSkills() {
           >
             {t('agents')}
           </Link>
-          {/* New skill (W3-09): an upload or a GitHub link, for an Admin's review. */}
+          {/* New skill: made in Chat (W3-08), or an upload or a GitHub link for an Admin's review (W3-09). */}
           {list && list !== 'failed' && list.can.save && (
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -223,6 +224,12 @@ export function ChatSkills() {
                 <ChevronDown aria-hidden className="size-3.5" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-60">
+                <DropdownMenuItem
+                  data-action="skills.create"
+                  onClick={() => router.push(composeHref(t('createText')))}
+                >
+                  {t('create')}
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   data-action="skills.upload"
                   onClick={() => setImporting('upload')}
@@ -596,6 +603,14 @@ function OwnCard({
       <CardTitle title={skill.title} onOpen={onOpen} />
       <p className="line-clamp-3 text-[13px] text-muted-foreground">{skill.description}</p>
       <p className="text-[11.5px] text-muted-foreground">{sourceLine(t, skill)}</p>
+      {/* The weekly check found a new SKILL.md at its source (W4-31). */}
+      {skill.updateAvailable && (
+        <p className="flex items-center gap-1.5 text-[11.5px]" data-slot="update-available">
+          <span className="rounded-full bg-sky-100 px-2 py-0.5 font-medium text-sky-800 dark:bg-sky-950/60 dark:text-sky-300">
+            {t('updateAvailable')}
+          </span>
+        </p>
+      )}
       <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">
         {usable && (
           <>
@@ -620,6 +635,15 @@ function OwnCard({
             )}
           >
             {t('review')}
+          </Link>
+        )}
+        {skill.updateAvailable && canReview && (
+          <Link
+            href={`/dashboard/chat/skills/${skill.id}/update`}
+            data-action="skills.reviewUpdate"
+            className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+          >
+            {t('reviewUpdate')}
           </Link>
         )}
         {skill.can.toggle && skill.status === 'approved' && (
