@@ -15,7 +15,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import supabaseAdmin from '../config/supabase.js';
 import logger from '../lib/logger.js';
-import { assertAllBrands, assertBrandAccess } from '../lib/access.js';
+import { MANAGER_ROLES, assertAllBrands, assertBrandAccess, assertRole } from '../lib/access.js';
 import {
   requireFeature,
   enforceSiteAuditQuota,
@@ -31,6 +31,7 @@ import {
   buildTrendPoints,
   findPreviousCompletedAudit,
   pageKey,
+  pageTrendUpTo,
   parseListPage,
   TREND_LIMIT,
 } from '../lib/audit/history.js';
@@ -1445,10 +1446,8 @@ router.get('/:id', async (req, res) => {
     if (historyResult?.error) {
       req.log.warn({ err: historyResult.error, auditId: id }, 'audit previous score lookup failed');
     }
-    const previous =
-      historyResult && !historyResult.error
-        ? findPreviousCompletedAudit(historyResult.data ?? [], id)
-        : null;
+    const history = historyResult && !historyResult.error ? (historyResult.data ?? []) : null;
+    const previous = history ? findPreviousCompletedAudit(history, id) : null;
 
     return res.json({
       success: true,
@@ -1456,6 +1455,8 @@ router.get('/:id', async (req, res) => {
         ...assembleAudit(audit, signalRows ?? []),
         previousScore: previous?.totalScore ?? null,
         previousCreatedAt: previous?.createdAt ?? null,
+        // The page's scores up to this audit, for the score's range (customer priorities item 1).
+        pageTrend: history ? pageTrendUpTo(history, id) : [],
       },
     });
   } catch (err) {
@@ -1518,6 +1519,8 @@ router.delete('/:id', async (req, res) => {
     }
 
     await assertBrandAccess(audit.brand_id, userId);
+    // Deleting for good is admins' and managers' (2026-11-03); running audits stays everyone's.
+    await assertRole(userId, MANAGER_ROLES, 'Only admins and managers can delete an audit.');
 
     const { error } = await supabaseAdmin.from('site_audits').delete().eq('id', id);
     if (error) throw error;

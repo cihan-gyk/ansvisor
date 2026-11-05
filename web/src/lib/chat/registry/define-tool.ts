@@ -3,6 +3,7 @@ import type { TeamRole } from '@/components/providers/role-provider';
 import type { Feature, PlanId } from '@/config/plans';
 import type { McpAuthContext } from '@/lib/mcp-auth';
 import type { ChatConfirmForm } from '../events';
+import type { PageVersionRead } from '../page-versions';
 
 /**
  * Chat's tool registry (CHAT-20 §9): one row per tool Chat may call, saying
@@ -84,6 +85,8 @@ export type ToolArea =
   | 'action_center'
   | 'content'
   | 'reports'
+  /** Making images (CHAT-15 §E, CHAT-20 §9 row 70). */
+  | 'images'
   /** Opening a page of the app (CHAT-19 §2). */
   | 'navigation'
   /** Opening a page on the web (CHAT-10 §B). */
@@ -93,7 +96,9 @@ export type ToolArea =
   /** The workspace's own skills (CHAT-13). */
   | 'skills'
   /** What Chat remembers between chats (CHAT-14). */
-  | 'memory';
+  | 'memory'
+  /** An agent running another agent (CHAT-27 phase 2). */
+  | 'agents';
 
 /**
  * What the plan decides about a call (CHAT-20 §7), null when nothing. The
@@ -163,10 +168,14 @@ export type ChatToolContext = McpAuthContext & {
   timezone?: string;
 };
 
-/** What an editable card's fields are made and read with: the run's zone and workspace, now. */
+/**
+ * What an editable card's fields are made and read with: the run's zone,
+ * workspace and person (whose role a memory's scopes follow, W3-12a), now.
+ */
 export interface CardFormContext {
   timezone: string;
   organizationId: string;
+  userId: string;
   now: Date;
 }
 
@@ -187,7 +196,7 @@ export interface ToolCardRun {
 }
 
 /** What a card's targets are, by kind: the browser names each kind from en.json. */
-export type ToolCardTargetKind = 'prompts' | 'pages' | 'competitors' | 'platforms';
+export type ToolCardTargetKind = 'prompts' | 'pages' | 'competitors' | 'platforms' | 'aiUse';
 
 /**
  * What a card shows of a change beyond its target (CHAT-09 item 18: what is
@@ -298,6 +307,17 @@ interface ToolFields<S extends z.ZodObject> {
    */
   deliverable?(input: z.output<S>, output: unknown): ToolDeliverable | null;
   /**
+   * A page's version for the deliverable's card (CHAT-25 §6, W4-12a): the
+   * page Chat made, or its change, numbered in the run's chat, with what
+   * changed. Its title is the draft's as it is now. Null for none; a read
+   * that fails shows the plain card.
+   */
+  versionOf?(
+    input: z.output<S>,
+    output: unknown,
+    place: { conversationId: string },
+  ): Promise<PageVersionRead | null>;
+  /**
    * A WRITE's check before its card or its run (CHAT-20 §12 rule 1: Send to
    * Action Center's duplicate check): a refusal it returns ({ ok: false,
    * reason, message }) answers the call, with no card and nothing changed;
@@ -339,25 +359,46 @@ interface ToolFields<S extends z.ZodObject> {
   };
   /** Its step once the change is made ("Scheduled: Weekly report"), when its words say more than the row's. */
   doneStep?(input: z.output<S>, output: unknown): { label: string; detail?: string } | null;
+  /**
+   * Whether the row is offered in this run at all (run_agent: only in an
+   * agent's run whose Can call names an agent, CHAT-27 item 14). Without it,
+   * every run that the precedence allows gets it. Not offered, it isn't
+   * explained as refused either.
+   */
+  offerIn?(run: { agentRunId: string | null }): Promise<boolean>;
+  /**
+   * What the change answers is untrusted data (another agent's words): the
+   * run is tainted after it, so every later change shows a card (CHAT-20 §16a).
+   */
+  taintsRun?: true;
   /** A valid input, for the registry's tests and the permission fixtures (CHAT-20 §19). */
   fixture: { input: z.input<S> };
 }
 
-/** Something a call made (CHAT-06 item 1): its card, and the file kept for it. */
-export interface ToolDeliverable {
+/**
+ * Something a call made (CHAT-06 item 1): its card, and the file kept for
+ * it: its content, which the engine files, or the file the call filed
+ * itself (`fileId`: a set of images, W4-08).
+ */
+export type ToolDeliverable = {
   title: string;
   type: 'document' | 'table' | 'code' | 'image' | 'report';
   /** The formats it downloads in, its main one first. */
   formats: string[];
-  /** Its canonical content, its type and its object's name in Files. */
-  body: string;
-  mimeType: string;
-  fileName: string;
   /** Its card's Open: an app page (the Content Editor's draft). */
   href?: `/dashboard/${string}`;
   /** The Content draft it is ("Used in Content draft"). */
   contentDraftId?: string;
-}
+} & (
+  | {
+      /** Its canonical content, its type and its object's name in Files. */
+      body: string;
+      mimeType: string;
+      fileName: string;
+      fileId?: undefined;
+    }
+  | { fileId: string }
+);
 
 type ClassFields =
   | { class: 'read'; flags?: Partial<Pick<ToolFlags, 'adminMayTurnOff' | 'costCard'>> }

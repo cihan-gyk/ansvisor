@@ -32,8 +32,10 @@ import {
   type TaskCardResult,
 } from '@/lib/actions/chat-task-card';
 import type { ChatDeliverable, ChatTaskStrip } from '@/lib/chat/events';
+import { SendPageButton, VersionDetails, useVersionLine } from './version-card';
 import { saveBlob } from '@/lib/download';
 import { cn } from '@/lib/utils';
+import { ImageSet } from './image-set';
 
 /** Each type's icon, on its card and its Files row. */
 export const DELIVERABLE_ICONS = {
@@ -106,8 +108,11 @@ export function DeliverableCard({
   const [busy, setBusy] = useState(false);
   const Icon = DELIVERABLE_ICONS[deliverable.type] ?? FileText;
   const filed = isFiled(deliverable);
+  // A set of images (W4-08): its images and PNG, in place of Copy and Download.
+  const images = deliverable.type === 'image' && filed;
   const formats = FORMAT_ORDER.filter((format) => deliverable.formats.includes(format));
   const fileUrl = (format: string) => `/api/chat/runs/${runId}/files/${n}?format=${format}`;
+  const versionLine = useVersionLine();
 
   async function copy() {
     try {
@@ -208,7 +213,10 @@ export function DeliverableCard({
               !filed && 'text-amber-700 dark:text-amber-400',
             )}
           >
-            {t(`types.${deliverable.type}`)} · {status}
+            {/* A page made or changed in chat: its version (W4-12a); one not filed says why. */}
+            {deliverable.version && filed
+              ? versionLine(deliverable.version)
+              : `${t(`types.${deliverable.type}`)} · ${status}`}
           </p>
           {task && (
             <p data-slot="deliverable-task" className="truncate text-xs text-muted-foreground">
@@ -217,8 +225,12 @@ export function DeliverableCard({
           )}
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-1">
-        {filed && (
+      {images && <ImageSet runId={runId} n={n} title={deliverable.title} />}
+      {deliverable.version && (
+        <VersionDetails version={deliverable.version} runId={runId} n={filed ? n : 0} />
+      )}
+      <div className="flex flex-wrap items-center gap-1 empty:hidden">
+        {filed && !images && (
           <>
             <button
               type="button"
@@ -251,6 +263,10 @@ export function DeliverableCard({
               </DropdownMenu>
             )}
           </>
+        )}
+        {/* A page made or changed in chat goes to the CMS from its card (CHAT-25 §6, W4-12b). */}
+        {filed && canChange && deliverable.version && deliverable.href && (
+          <SendPageButton href={deliverable.href} className={ACTION} />
         )}
         {deliverable.filed === 'storage_full' && openGetMore && (
           <button

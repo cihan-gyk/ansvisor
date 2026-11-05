@@ -5,12 +5,15 @@ import {
   maskIds,
   type ChatDeliverable,
   type ChatNextMove,
+  type ChatPageVersion,
   type ChatRunSummary,
   type ChatActionSent,
   type ChatStep,
   type ChatTaskStrip,
+  type ChatWhatsNewEntry,
 } from './events';
 import { clientMove } from './next-moves';
+import { latestChoice, type ChatModelChoice } from './models';
 import { applyChatEvent, emptyRun } from './run-state';
 import { CHAT_RUN_STEP_SELECT, toClientStep, type ChatRunStepMemberRow } from './steps';
 import { readDeliverableTasks, readStrips, weekEndIn, type DeliverableTask } from './task-strip';
@@ -50,12 +53,16 @@ export interface ThreadRun {
   keyFailed: boolean;
   /** What could come next once it finished (CHAT-07 §C), best first. */
   nextMoves: ChatNextMove[];
+  /** "Remember this?": the line it offered to remember (W4-33); null when none. */
+  remember: string | null;
   /** What it sent to the Action Center (CHAT-09 item 19), in order. */
   sent: ChatActionSent[];
   /** The Action Center tasks it worked on (CHAT-09 §B); null when it had none. */
   tasks: ChatTaskStrip | null;
   /** The Why did it move analyses it kept (CHAT-22 §1), in order. */
   why: ChatWhy[];
+  /** What's new's cards (CHAT-11 item 10). */
+  whatsNew: ChatWhatsNewEntry[];
 }
 
 export interface ThreadMessage {
@@ -80,6 +87,11 @@ export interface ChatThread {
   /** The person's own chat; false for a teammate's shared one, which they only read. */
   mine: boolean;
   messages: ThreadMessage[];
+  /**
+   * The model and effort its latest run ran with: the composer's model menu
+   * starts on it (W4-02). Missing: Auto at Normal.
+   */
+  choice?: ChatModelChoice;
 }
 
 /** A file in Files the chat's runs made or saved, as the thread reads it. */
@@ -98,6 +110,14 @@ interface FileRow {
 const END_EVENTS = ['run.finished', 'run.stopped', 'run.error', 'run.paused_cap'];
 /** What a run sent to the Action Center (CHAT-09 item 19), read back with its end. */
 const SENT_EVENT = 'action.sent';
+/** "Remember this?" (W4-33): the line a finished run offered to remember. */
+const REMEMBER_EVENT = 'remember.offered';
+/** What's new's cards (CHAT-11 item 10), read back the same way. */
+const WHATS_NEW_EVENT = 'whats_new.ready';
+/** A run's deliverables, read back for their page versions (W4-12a), which Files doesn't keep. */
+const DELIVERABLE_EVENTS = ['deliverable.created', 'deliverable.updated'];
+/** Where a page's card links: the editor. */
+const EDITOR_PATH = '/dashboard/content/editor/';
 
 /** What an ended run's events keep: its end, and what it sent to the Action Center. */
 interface RunEnd {
@@ -105,6 +125,10 @@ interface RunEnd {
   errorReason: string | null;
   keyFailed: boolean;
   sent: ChatActionSent[];
+  remember: string | null;
+  /** Its filed pages' versions, in order; null for a page without one (W4-12a). */
+  versions: (ChatPageVersion | null)[];
+  whatsNew: ChatWhatsNewEntry[];
 }
 const ENDED: readonly string[] = ['done', 'stopped', 'error', 'paused_cap'];
 
@@ -122,7 +146,7 @@ async function readRunEnds(runIds: string[]): Promise<Map<string, RunEnd>> {
     .from('chat_run_events')
     .select('run_id, seq, type, data')
     .in('run_id', runIds)
-    .in('type', [...END_EVENTS, SENT_EVENT])
+    .in('type', [...END_EVENTS, SENT_EVENT, REMEMBER_EVENT, WHATS_NEW_EVENT, ...DELIVERABLE_EVENTS])
     .order('seq', { ascending: true });
   if (error) {
     console.error("[chat/thread] could not read the runs' ends:", error.message);
@@ -140,9 +164,35 @@ async function readRunEnds(runIds: string[]): Promise<Map<string, RunEnd>> {
       errorReason: null,
       keyFailed: false,
       sent: [],
+      remember: null,
+      versions: [],
+      whatsNew: [],
     };
+    if (DELIVERABLE_EVENTS.includes(row.type)) {
+      // Only a page that reached Files has a file to take its version.
+      const made = row.data as ChatDeliverable;
+      const page = made.filed === 'in_files' && made.href?.startsWith(EDITOR_PATH);
+      ends.set(
+        row.run_id,
+        page ? { ...kept, versions: [...kept.versions, made.version ?? null] } : kept,
+      );
+      continue;
+    }
+    if (row.type === WHATS_NEW_EVENT) {
+      const cards = (row.data as { entries?: unknown }).entries;
+      ends.set(row.run_id, {
+        ...kept,
+        whatsNew: Array.isArray(cards) ? (cards as ChatWhatsNewEntry[]) : [],
+      });
+      continue;
+    }
     if (row.type === SENT_EVENT) {
       ends.set(row.run_id, { ...kept, sent: [...kept.sent, row.data as ChatActionSent] });
+      continue;
+    }
+    if (row.type === REMEMBER_EVENT) {
+      const text = (row.data as { text?: unknown }).text;
+      ends.set(row.run_id, { ...kept, remember: typeof text === 'string' ? text : null });
       continue;
     }
     const run = applyChatEvent(emptyRun(), {
@@ -191,7 +241,7 @@ export async function loadChatThread(conversationId: string): Promise<ChatThread
       .order('created_at', { ascending: true }),
     supabase
       .from('chat_runs')
-      .select('id, message_id, status')
+      .select('id, message_id, status, model, effort, created_at')
       .eq('conversation_id', conversationId),
   ]);
   if (messages.error) throw new Error(`Could not read the chat: ${messages.error.message}`);
@@ -294,12 +344,16 @@ export async function loadChatThread(conversationId: string): Promise<ChatThread
     conversationId,
     madeIds.map((f) => f.id),
   );
+  // Each run's page versions, in the order its pages were filed (W4-12a).
+  const versionsLeft = new Map([...ends].map(([runId, end]) => [runId, [...end.versions]]));
   for (const f of (files.data ?? []) as FileRow[]) {
     if (!f.run_id) continue;
     if (f.message_id) {
       fileByRun.set(f.run_id, f.id);
       continue;
     }
+    // Each page the run filed takes its next version, in order.
+    const version = f.content_draft_id ? versionsLeft.get(f.run_id)?.shift() : undefined;
     madeByRun.set(f.run_id, [
       ...(madeByRun.get(f.run_id) ?? []),
       {
@@ -307,9 +361,10 @@ export async function loadChatThread(conversationId: string): Promise<ChatThread
         type: f.type,
         formats: f.formats,
         status: f.status,
-        ...(f.content_draft_id ? { href: `/dashboard/content/editor/${f.content_draft_id}` } : {}),
+        ...(f.content_draft_id ? { href: `${EDITOR_PATH}${f.content_draft_id}` } : {}),
         filed: 'in_files',
         ...(tasksOfFiles.has(f.id) ? { task: tasksOfFiles.get(f.id) } : {}),
+        ...(version ? { version } : {}),
       },
     ]);
   }
@@ -331,9 +386,12 @@ export async function loadChatThread(conversationId: string): Promise<ChatThread
         errorReason: ends.get(run.id)?.errorReason ?? null,
         keyFailed: ends.get(run.id)?.keyFailed ?? false,
         nextMoves: movesByRun.get(run.id) ?? [],
+        // The author's own chat only, as the moves.
+        remember: mine ? (ends.get(run.id)?.remember ?? null) : null,
         sent: ends.get(run.id)?.sent ?? [],
         tasks: strips.get(run.id) ?? null,
         why: whyByRun.get(run.id) ?? [],
+        whatsNew: ends.get(run.id)?.whatsNew ?? [],
       },
     ]),
   );
@@ -343,6 +401,7 @@ export async function loadChatThread(conversationId: string): Promise<ChatThread
     title: chat.title,
     brandId: chat.brand_id,
     mine,
+    choice: latestChoice(runs.data ?? []),
     messages: (messages.data ?? []).map((message) => ({
       role: message.role as 'user' | 'assistant',
       text: message.content_md,

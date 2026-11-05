@@ -19,8 +19,9 @@ const STEP = '99999999-9999-4999-8999-999999999999';
 
 const db = vi.hoisted(() => ({ tables: {}, rpc: [] }));
 const sendContentPages = vi.hoisted(() => vi.fn());
-const flags = vi.hoisted(() => ({ chatOn: true, demo: false, cloud: true }));
+const flags = vi.hoisted(() => ({ demo: false, cloud: true }));
 const access = vi.hoisted(() => ({ value: null }));
+const log = vi.hoisted(() => ({ error: null, warn: null }));
 
 /** A query on the in-memory tables: eq filters and one row. */
 function query(table) {
@@ -53,7 +54,6 @@ vi.mock('../config/supabase.js', () => ({
   },
 }));
 vi.mock('../config/plans.js', () => ({ isCloud: () => flags.cloud }));
-vi.mock('../lib/chat-flag.js', () => ({ chatAgenticEnabled: () => flags.chatOn }));
 vi.mock('../lib/access.js', () => ({ brandAccessOf: async () => access.value }));
 vi.mock('../middleware/demo-brand.js', () => ({ isDemoBrand: async () => flags.demo }));
 vi.mock('../lib/content-delivery.js', async (importOriginal) => ({
@@ -150,9 +150,15 @@ let baseUrl;
 
 beforeEach(async () => {
   vi.stubEnv('CRON_SECRET', 'shh');
+  // Chat, and going live on its own, on for every workspace (lib/chat-flag.js, read for real).
+  vi.stubEnv('CHAT_AGENTIC', 'true');
+  vi.stubEnv('CHAT_AGENTIC_ORGS', '');
+  vi.stubEnv('CHAT_AUTO_GO_LIVE', 'true');
+  vi.stubEnv('CHAT_AUTO_GO_LIVE_ORGS', '');
+  log.error = vi.fn();
+  log.warn = vi.fn();
   tellWentLive.mockClear();
   publishContentPage.mockReset();
-  flags.chatOn = true;
   flags.demo = false;
   flags.cloud = true;
   access.value = { orgId: ORG, role: 'admin', all: true, brandIds: new Set() };
@@ -198,7 +204,7 @@ beforeEach(async () => {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.log = { error: vi.fn() };
+    req.log = log;
     next();
   });
   app.use('/', router);
@@ -263,7 +269,10 @@ describe('POST /api/internal/chat/go-live/send', () => {
 
   /** Each check that fails: nothing goes, and the step's own slot is freed. */
   const refusals = [
-    ['chat_off', () => (flags.chatOn = false)],
+    ['chat_off', () => vi.stubEnv('CHAT_AGENTIC', 'false')],
+    ['auto_go_live_off', () => vi.stubEnv('CHAT_AUTO_GO_LIVE', undefined)],
+    ['auto_go_live_off', () => vi.stubEnv('CHAT_AUTO_GO_LIVE', 'false')],
+    ['auto_go_live_off', () => vi.stubEnv('CHAT_AUTO_GO_LIVE_ORGS', BRAND)],
     ['plan', () => (db.tables.organizations[0].plan = 'starter')],
     ['plan', () => (db.tables.organizations[0].subscription_status = 'canceled')],
     ['plan', () => Object.assign(db.tables.organizations[0], { subscription_status: 'trialing' })],
@@ -293,6 +302,37 @@ describe('POST /api/internal/chat/go-live/send', () => {
     expect(finished()).toEqual([
       expect.objectContaining({ p_id: STEP, p_status: 'failed', p_error: `refused: ${code}` }),
     ]);
+  });
+
+  it('sends nothing while staff turned going live on its own off, though the workspace’s switch is on', async () => {
+    // The workspace's own saved switch is on, the agent allowed: only the deployment's switch is off.
+    expect(db.tables.chat_settings[0].auto_go_live_groups).toEqual(['publishing']);
+    expect(db.tables.chat_agent_go_live[0].version).toBe(3);
+    vi.stubEnv('CHAT_AUTO_GO_LIVE', 'false');
+    for (const kind of ['cms_draft', 'publish']) {
+      db.tables.chat_agent_go_live_events[0].kind = kind;
+      const res = await send({ ...BODY, kind });
+      expect(res.status, kind).toBe(403);
+      expect(await res.json()).toEqual({ success: false, code: 'auto_go_live_off' });
+    }
+    expect(sendContentPages).not.toHaveBeenCalled();
+    expect(publishContentPage).not.toHaveBeenCalled();
+    expect(tellWentLive).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: ORG, agentRunId: AGENT_RUN, draftId: DRAFT }),
+      'internal go-live refused: CHAT_AUTO_GO_LIVE is off for the workspace',
+    );
+
+    // On again, and for this workspace on the rollout list (any case): the step goes.
+    db.tables.chat_agent_go_live_events[0].kind = 'cms_draft';
+    db.tables.chat_agent_go_live_events[0].status = 'reserved';
+    vi.stubEnv('CHAT_AUTO_GO_LIVE', 'true');
+    vi.stubEnv('CHAT_AUTO_GO_LIVE_ORGS', ` ${ORG.toUpperCase()} , ${BRAND}`);
+    log.warn.mockClear();
+    const res = await send();
+    expect(res.status).toBe(200);
+    expect(sendContentPages).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('lets a Manager send while publishing is on for Managers, and self-hosted needs no plan', async () => {
@@ -425,6 +465,55 @@ describe('POST /api/internal/chat/go-live/send', () => {
     expect(finished().at(-1)).toMatchObject({ p_status: 'failed' });
   });
 
+  it('sends a page to the brand’s webhook for a webhook step, never with an address (PR 11)', async () => {
+    Object.assign(db.tables.chat_agent_go_live_events[0], { kind: 'webhook', target: 'webhook' });
+    sendContentPages.mockResolvedValueOnce({
+      batchId: null,
+      deliveries: [{ id: 'd5', draftId: DRAFT, status: 'sent', external_id: null, error: null }],
+      skipped: 0,
+    });
+    const res = await send({ ...BODY, kind: 'webhook', target: 'webhook' });
+    expect(res.status).toBe(200);
+    expect(sendContentPages).toHaveBeenCalledWith({
+      orgId: ORG,
+      brandId: BRAND,
+      userId: ACTOR,
+      pages: [expect.objectContaining({ draftId: DRAFT })],
+      target: 'webhook',
+      agentRunId: AGENT_RUN,
+    });
+    expect(publishContentPage).not.toHaveBeenCalled();
+    expect(finished()).toEqual([
+      expect.objectContaining({ p_id: STEP, p_status: 'done', p_delivery_id: 'd5' }),
+    ]);
+    await vi.waitFor(() => expect(tellWentLive).toHaveBeenCalledWith({ eventId: STEP }));
+
+    // A brand without a webhook: refused by the send, its slot freed.
+    db.tables.chat_agent_go_live_events[0].status = 'reserved';
+    sendContentPages.mockRejectedValueOnce(
+      new DeliveryError('no_webhook', 'No workflow connected', 409),
+    );
+    const none = await send({ ...BODY, kind: 'webhook', target: 'webhook' });
+    expect(none.status).toBe(409);
+    expect(await none.json()).toMatchObject({ code: 'no_webhook' });
+    expect(finished().at(-1)).toMatchObject({ p_status: 'failed' });
+  });
+
+  it('never sends a page to the webhook twice on a slot done already (PR 11)', async () => {
+    // Each webhook send is a new package the workflow may post: unlike a CMS draft, no update.
+    const step = db.tables.chat_agent_go_live_events[0];
+    db.tables.chat_agent_go_live_events = [
+      { ...step, kind: 'webhook', target: 'webhook', status: 'done', agent_run_id: RUN },
+    ];
+    const res = await send({ ...BODY, kind: 'webhook', target: 'webhook' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ success: false, code: 'already_sent' });
+    expect(sendContentPages).not.toHaveBeenCalled();
+    // The done step is kept as it was, and nobody is told again.
+    expect(finished()).toEqual([]);
+    expect(tellWentLive).not.toHaveBeenCalled();
+  });
+
   it('answers the step even when telling people fails', async () => {
     tellWentLive.mockRejectedValueOnce(new Error('mail down'));
     const res = await send();
@@ -544,6 +633,26 @@ describe('POST /api/internal/chat/go-live/quality-reads', () => {
       expect(body[read]).toEqual({ ok: false, code: 'off' });
     }
     expect(reads.claims).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing, and spends nothing, while staff turned going live on its own off', async () => {
+    vi.stubEnv('CHAT_AUTO_GO_LIVE', 'false');
+    const res = await ask();
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ success: false, code: 'auto_go_live_off' });
+    vi.stubEnv('CHAT_AUTO_GO_LIVE', 'true');
+    vi.stubEnv('CHAT_AUTO_GO_LIVE_ORGS', BRAND);
+    expect(await (await ask()).json()).toEqual({ success: false, code: 'auto_go_live_off' });
+    vi.stubEnv('CHAT_AGENTIC', 'false');
+    expect(await (await ask()).json()).toEqual({ success: false, code: 'chat_off' });
+    expect(reads.links).not.toHaveBeenCalled();
+    expect(reads.claims).not.toHaveBeenCalled();
+    expect(reads.reserve).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: ORG, agentRunId: AGENT_RUN, path: '/quality-reads' }),
+      'internal go-live refused: CHAT_AUTO_GO_LIVE is off for the workspace',
+    );
   });
 
   it('reads nothing for a run that isn’t this person’s, or a draft they can’t read', async () => {

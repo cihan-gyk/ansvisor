@@ -1,18 +1,24 @@
 import { z } from 'zod';
-import { publishDraftToCms, sendDraftToCms } from '@/lib/actions/cms-send';
+import { publishDraftToCms, sendDraftToCms, sendDraftToWebhook } from '@/lib/actions/cms-send';
 import { takeDownDraft } from '@/lib/actions/cms-take-down';
-import { updateContentDraft } from '@/lib/actions/content-drafts';
+import {
+  setContentDraftReady,
+  suggestDraftChanges,
+  updateContentDraft,
+} from '@/lib/actions/content-drafts';
 import { actorOf } from '@/lib/chat/actor/access';
 import { updateContentDraftFor } from '@/lib/chat/actor/drafts';
 import { CHAT_CMS_TARGETS, CMS_NAMES } from '@/lib/content/cms-names';
 import { MAX_BODY_HTML_LENGTH, MAX_TITLE_LENGTH } from '@/lib/content/editor';
+import { sanitizeDraftHtml } from '@/lib/content/sanitize-draft-html';
 import { contentUuid } from '@/lib/mcp/content-schemas';
+import { readPageVersion } from '../page-versions';
 import { FIXTURE_IDS, defineTool } from './define-tool';
 import { draftPage, draftTitle, pageChanges } from './targets';
 
 /**
- * Chat's Content Library rows beyond create_draft (CHAT-20 §9 rows 55, 58):
- * changing a draft (a WRITE), and sending one to the brand's CMS as a draft
+ * Chat's Content Library rows beyond create_draft (CHAT-20 §9 rows 55, 57, 58):
+ * changing a draft and marking it Ready (WRITEs), and sending one to the brand's CMS as a draft
  * (an EXECUTE in the publishing group: it leaves Ansvisor). Each calls a
  * server action over the editor's own path, as the signed-in member; a
  * change also has its write for a run without a session (runFor). Both
@@ -25,10 +31,20 @@ import { draftPage, draftTitle, pageChanges } from './targets';
  * sends them through the API's internal route as the run's person, after
  * its checks. Taking a published page down (unpublish_cms, PR 10) is always
  * the person's click: outside the go-live groups, a Manager may even while
- * publishing is off for Managers, as it only lowers what is live.
+ * publishing is off for Managers, as it only lowers what is live. Sending a
+ * page to the brand's saved webhook (trigger_content_webhook, row 61, PR 11)
+ * is an EXECUTE of the publishing group too, and an allowed agent's on its
+ * own (§4 row 5): its workflow decides what happens next, so it has no Undo.
  */
 
 const ITEM = FIXTURE_IDS.item;
+
+/** A change update_draft made, with the History version that kept the page before it. */
+const changed = (output: unknown): output is { ok: true; beforeVersionId: string } =>
+  !!output &&
+  typeof output === 'object' &&
+  (output as { ok?: unknown }).ok === true &&
+  typeof (output as { beforeVersionId?: unknown }).beforeVersionId === 'string';
 
 export const CONTENT_TOOLS = [
   defineTool({
@@ -36,7 +52,7 @@ export const CONTENT_TOOLS = [
     class: 'write',
     area: 'content',
     description:
-      'Change a draft in the Content Library (its id from list_content_drafts): its title, its page as HTML, or both. History keeps the page before the change. Only what the person asked to change; send the whole page when changing it.',
+      'Change a draft in the Content Library (its id from list_content_drafts): its title, its page as HTML, or both. History keeps the page before the change. Only what the person asked to change; send the whole page when changing it. Not for the page open in the Content Editor beside this chat (the page context’s draft chip): use suggest_draft_changes for that one.',
     defaultPolicy: 'ask_full_auto',
     maxPolicy: 'always',
     minRole: 'manager',
@@ -68,6 +84,29 @@ export const CONTENT_TOOLS = [
         title: input.title,
         bodyHtml: input.body_html,
       }),
+    // The page's next version in this chat (CHAT-25 §6, W4-12a): filed as the page Chat made is,
+    // its card saying what changed. A change of the title alone makes none.
+    deliverable: (input, output) =>
+      changed(output) && input.body_html !== undefined
+        ? {
+            title: input.title ?? '',
+            type: 'document',
+            formats: ['html', 'md', 'docx', 'pdf'],
+            body: sanitizeDraftHtml(input.body_html),
+            mimeType: 'text/html',
+            fileName: 'page.html',
+            href: `/dashboard/content/editor/${input.draft_id}`,
+            contentDraftId: input.draft_id,
+          }
+        : null,
+    versionOf: (input, output, place) =>
+      changed(output)
+        ? readPageVersion({
+            draftId: input.draft_id,
+            conversationId: place.conversationId,
+            beforeVersionId: output.beforeVersionId,
+          })
+        : Promise.resolve(null),
     target: async (input) => {
       const now = await draftPage(input.draft_id);
       if (!now) return input.title ? `“${input.title}”` : null;
@@ -83,6 +122,68 @@ export const CONTENT_TOOLS = [
     fixture: { input: { draft_id: ITEM, title: 'Pricing FAQ for teams' } },
   }),
   defineTool({
+    name: 'suggest_draft_changes',
+    // The page open in the Content Editor beside the chat (CHAT-25 §4 item 5, W4-14): never
+    // changed from here. The Content Agent leaves suggestions for the person's Accept or
+    // Reject in the editor; the engine offers it only then. A WRITE like any (AskFA).
+    class: 'write',
+    area: 'content',
+    description:
+      'For the page open in the Content Editor beside this chat (the page context’s draft chip): pass the person’s request in their own words; the Content Agent leaves suggestions in the editor for them to accept or reject, with the editor’s guards (kept quotes, known links, no invented facts). The page doesn’t change until they accept. One request a call.',
+    defaultPolicy: 'ask_full_auto',
+    maxPolicy: 'always',
+    minRole: 'manager',
+    planGate: null,
+    brandOf: { lookup: 'content_drafts', idField: 'draft_id' },
+    costClass: 'C2',
+    labelKey: 'editorSuggestions',
+    route: '/dashboard/content/library',
+    mcpTool: null,
+    specRow: '55',
+    inputSchema: z.object({
+      draft_id: contentUuid.describe('The draft open in the editor, from the page context.'),
+      request: z
+        .string()
+        .trim()
+        .min(1)
+        .max(500)
+        .describe('What the person asked to change, in their words.'),
+    }),
+    run: (_ctx, input) => suggestDraftChanges(input.draft_id, input.request),
+    target: async (input) => {
+      const title = await draftTitle(input.draft_id);
+      return title ? `“${title}”` : null;
+    },
+    fixture: { input: { draft_id: ITEM, request: 'Make answer 3 shorter' } },
+  }),
+  defineTool({
+    name: 'set_draft_ready',
+    // The editor's Mark ready (CHAT-25 §6): a WRITE, Undo for 7 days. Nothing is published.
+    class: 'write',
+    area: 'content',
+    description:
+      "Mark a Library draft Ready to publish (its id from list_content_drafts), as the Content Editor's Mark ready does: its Action Center task for the page is done. Nothing is published or sent. Only when the person asked for the page to be marked ready.",
+    defaultPolicy: 'ask_full_auto',
+    maxPolicy: 'always',
+    minRole: 'manager',
+    planGate: null,
+    brandOf: { lookup: 'content_drafts', idField: 'draft_id' },
+    costClass: 'C0',
+    labelKey: 'markDraftReady',
+    route: '/dashboard/content/library',
+    mcpTool: null,
+    specRow: '57',
+    inputSchema: z.object({
+      draft_id: contentUuid.describe('The draft, from list_content_drafts.'),
+    }),
+    run: (_ctx, input) => setContentDraftReady(input.draft_id),
+    target: async (input) => {
+      const title = await draftTitle(input.draft_id);
+      return title ? `“${title}”` : null;
+    },
+    fixture: { input: { draft_id: ITEM } },
+  }),
+  defineTool({
     name: 'push_cms_draft',
     // It leaves Ansvisor and has no Undo (a CMS item can't be taken back from here; an
     // item updated in Framer or Webflow goes live with the site's next publish): an
@@ -94,7 +195,7 @@ export const CONTENT_TOOLS = [
     executeGroup: 'publishing',
     area: 'content',
     description:
-      "Send a Library draft to the brand's connected CMS as a draft there (Webflow, WordPress, Framer or Wix): nothing goes live. A page that is live already, or a send to the brand's webhook, goes from the Content Editor. Its slug and meta are what it kept from its last send, else the page's. Only when the person asked for this page to go to that CMS.",
+      "Send a Library draft to the brand's connected CMS as a draft there (Webflow, WordPress, Framer or Wix): nothing goes live. A page that is live already goes from the Content Editor; a send to the brand's webhook is trigger_content_webhook. Its slug and meta are what it kept from its last send, else the page's. Only when the person asked for this page to go to that CMS.",
     minRole: 'manager',
     // A connection, not a plan: the API says when the brand hasn't one (not_connected).
     planGate: null,
@@ -150,6 +251,36 @@ export const CONTENT_TOOLS = [
         .join(' ');
     },
     fixture: { input: { draft_id: ITEM, destination: 'webflow' } },
+  }),
+  defineTool({
+    name: 'trigger_content_webhook',
+    // It hands the page to the brand's own workflow (Zapier, Make, n8n), which may publish it,
+    // and Ansvisor can't take it back: an EXECUTE, only the person's click, or an agent an Admin
+    // let go live on its own (goLive). No address in its input: only the brand's saved webhook.
+    class: 'execute',
+    executeGroup: 'publishing',
+    area: 'content',
+    description:
+      "Send a Library page to the brand's saved webhook, for its workflow (Zapier, Make, n8n), as the Content Editor's Send to webhook does: the workflow decides what happens next, and Ansvisor can't take it back. Not for a page that is live already. Only when the person asked for this page to go to their webhook.",
+    minRole: 'manager',
+    // A connection, not a plan: the API says when the brand has no webhook (not_connected).
+    planGate: null,
+    brandOf: { lookup: 'content_drafts', idField: 'draft_id' },
+    costClass: 'C1',
+    labelKey: 'sendToWebhook',
+    route: '/dashboard/content/library',
+    mcpTool: null,
+    specRow: '61',
+    inputSchema: z.object({
+      draft_id: contentUuid.describe('The draft, from list_content_drafts.'),
+    }),
+    run: (_ctx, input) => sendDraftToWebhook(input.draft_id),
+    goLive: (input) => ({ kind: 'webhook', draftId: input.draft_id, target: 'webhook' }),
+    target: async (input) => {
+      const title = await draftTitle(input.draft_id);
+      return [title ? `“${title}”` : null, `→ ${CMS_NAMES.webhook}`].filter(Boolean).join(' ');
+    },
+    fixture: { input: { draft_id: ITEM } },
   }),
   defineTool({
     name: 'unpublish_cms',

@@ -156,7 +156,10 @@ export interface ChatConfirm {
   /** What it aims at. */
   goal?: string;
   /** What it is about, by kind, in the person's words: frozen once it's made. */
-  targets?: { kind: 'prompts' | 'pages' | 'competitors' | 'platforms'; values: string[] }[];
+  targets?: {
+    kind: 'prompts' | 'pages' | 'competitors' | 'platforms' | 'aiUse';
+    values: string[];
+  }[];
   /**
    * An editable card (CHAT-12 item 7; W3-02): its fields, as the change
    * would be made. Its button sends the edited values with the Approve; the
@@ -174,8 +177,11 @@ export interface ChatFormField {
   value: string | boolean;
   /** The longest text it takes. */
   maxLength?: number;
-  /** A choice's options, in order. */
-  options?: { value: string; label: string }[];
+  /**
+   * A choice's options, in order; `disabled`: shown, but not the person's to
+   * pick (a memory's scope their role doesn't change, W3-12a).
+   */
+  options?: { value: string; label: string; disabled?: boolean }[];
   /** The line under it: "Every Monday, 09:00 · Europe/Istanbul · Next: Mon 9 Nov, 09:00". */
   hint?: string;
   /** A text that can't be left empty. */
@@ -292,6 +298,34 @@ export interface ChatDeliverable {
    * Action Center has the task completed. None when that isn't certain.
    */
   task?: { title: string; state: 'open' | 'done' };
+  /** A page made or changed in chat, as its version card shows it (CHAT-25 §6, W4-12a). */
+  version?: ChatPageVersion;
+}
+
+/** A section of a page as a version card lists it. */
+export interface ChatPageSection {
+  heading: string;
+  text: string;
+}
+
+/**
+ * A page's version in chat (CHAT-25 §6, mockup #e-chat; W4-12a): its number
+ * in this chat (the page Chat made is 1, each change made here one more),
+ * its counts, what changed since the one before, its sections (cut to fit)
+ * for the preview and Show all, and whether Undo can put the version before
+ * back. No id: the server keeps which History version that is (the run's
+ * progress, by its file), and Undo names the card by its run and place.
+ */
+export interface ChatPageVersion {
+  n: number;
+  counts: { questions: number; sections: number; characters: number };
+  changes: {
+    shortened: { heading: string; before: number; after: number }[];
+    added: string[];
+    placeholders: string[];
+  };
+  sections: ChatPageSection[];
+  canUndo?: boolean;
 }
 
 /**
@@ -320,6 +354,23 @@ export interface ChatRunSummary {
   stepCount: number;
   /** The "Data used" chips: "Citations · 42". */
   sources: { label: string; count: number }[];
+  /** "Thought for N s" above the answer: the work before its first words; only when shown. */
+  thoughtMs?: number;
+}
+
+/**
+ * A What's new entry as its card shows it (CHAT-11 item 10): the team's
+ * words as approved, never a price. `slug` is the entry's file name, to mark
+ * it read when Try it is opened: not an id.
+ */
+export interface ChatWhatsNewEntry {
+  slug: string;
+  feature: string;
+  lines: string[];
+  /** Try it: the feature's page, with the brand open now. */
+  href: ChatHref;
+  /** "Growth and Enterprise": the plans that include it, when the person's doesn't. */
+  onPlans?: string;
 }
 
 /** Where a page Chat writes was opened (CHAT-25 §3). */
@@ -342,6 +393,13 @@ export interface ChatEventPayloads {
   'why.ready': ChatWhy;
   'confirm.required': ChatConfirm;
   next_moves: { moves: ChatNextMove[] };
+  /**
+   * "Remember this?" under the answer (CHAT-14 item 9, W4-33): a lasting
+   * preference the person stated, as the line its click asks Chat to
+   * remember; at most once a conversation. Nothing is saved without the
+   * Remember card's Save.
+   */
+  'remember.offered': { text: string };
   'usage.updated': ChatUsage;
   /** generatedAt and dataAsOf: the answer's "Generated …" and "Data as of …" (CHAT-06 38–39). */
   'run.finished': ChatRunSummary & { generatedAt: string; dataAsOf: string | null };
@@ -377,12 +435,14 @@ export interface ChatEventPayloads {
   'tasks.updated': ChatTaskStrip;
   // Editor in Chat (CHAT-25 §12, Phase 4): payloads grow with it.
   /** A new version card of a page Chat writes. */
-  'deliverable.updated': ChatDeliverable & { version: number };
+  'deliverable.updated': ChatDeliverable;
   /** Suggestions Chat made on the open page, for the editor to show. */
   'suggestion.created': { count: number };
   'suggestion.resolved': { count: number };
   /** href: the page's draft, in the editor beside the chat or the Content Editor. */
   'page.opened': { where: ChatPageWhere; href?: ChatHref };
+  /** What's new's cards under the answer (CHAT-11 item 10). */
+  'whats_new.ready': { entries: ChatWhatsNewEntry[] };
 }
 
 export type ChatEventType = keyof ChatEventPayloads;
@@ -404,6 +464,7 @@ const EVENT_TYPES: Record<ChatEventType, true> = {
   'why.ready': true,
   'confirm.required': true,
   next_moves: true,
+  'remember.offered': true,
   'usage.updated': true,
   'run.finished': true,
   'run.error': true,
@@ -416,6 +477,7 @@ const EVENT_TYPES: Record<ChatEventType, true> = {
   'suggestion.created': true,
   'suggestion.resolved': true,
   'page.opened': true,
+  'whats_new.ready': true,
 };
 
 export const CHAT_EVENT_TYPES = Object.keys(EVENT_TYPES) as ChatEventType[];

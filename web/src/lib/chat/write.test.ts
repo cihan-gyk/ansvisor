@@ -19,6 +19,7 @@ import {
   fakeKeepDraftVersion,
   fakeSendDraftToCms,
   fakeStartSiteAudits,
+  fakeSetDraftReady,
   fakeUpdateContentDraft,
   fakeAddBrandTopic,
   fakeAddCompetitors,
@@ -44,6 +45,8 @@ vi.mock('@/lib/supabase/admin', async () => ({
 vi.mock('@/lib/actions/content-drafts', () => ({
   createContentDraft: vi.fn(),
   updateContentDraft: vi.fn(),
+  setContentDraftReady: vi.fn(),
+  suggestDraftChanges: vi.fn(),
 }));
 vi.mock('@/lib/chat/actor/drafts', () => ({
   createContentDraftFor: vi.fn(),
@@ -80,7 +83,8 @@ vi.mock('@/lib/actions/chat-memory', () => ({
 
 const { supabaseAdmin } = await import('@/lib/supabase/admin');
 const db = supabaseAdmin as unknown as FakeSupabase;
-const { createContentDraft, updateContentDraft } = await import('@/lib/actions/content-drafts');
+const { createContentDraft, setContentDraftReady, suggestDraftChanges, updateContentDraft } =
+  await import('@/lib/actions/content-drafts');
 const { createContentDraftFor, updateContentDraftFor } = await import('@/lib/chat/actor/drafts');
 const { updateOpportunityStatusFor } = await import('@/lib/chat/actor/api-writes');
 const { sendDraftToCms } = await import('@/lib/actions/cms-send');
@@ -160,8 +164,11 @@ const INPUTS: Record<string, unknown> = {
   },
   set_task_ready_for_review: { brand_id: BRAND, task_id: '99999999-9999-4999-8999-999999999999' },
   update_draft: { draft_id: DRAFT, title: 'Pricing FAQ for teams' },
+  suggest_draft_changes: { draft_id: DRAFT, request: 'Make answer 3 shorter' },
+  set_draft_ready: { draft_id: DRAFT },
   push_cms_draft: { draft_id: DRAFT, destination: 'webflow' },
   publish_cms: { draft_id: DRAFT, destination: 'webflow' },
+  trigger_content_webhook: { draft_id: DRAFT },
   build_report: {
     brand_id: BRAND,
     template: 'weekly_visibility',
@@ -178,7 +185,13 @@ const INPUTS: Record<string, unknown> = {
   forget_memory: { memory_id: MEMORY_LINE },
 };
 /** The rows that change or send a Library draft find one. */
-const NEEDS_DRAFT = new Set(['update_draft', 'push_cms_draft', 'publish_cms']);
+const NEEDS_DRAFT = new Set([
+  'update_draft',
+  'suggest_draft_changes',
+  'set_draft_ready',
+  'push_cms_draft',
+  'publish_cms',
+]);
 const toolCtx = {} as never;
 let step = 0;
 const nextStep = () => `step-${++step}`;
@@ -189,6 +202,9 @@ beforeEach(() => {
   seedWorkspace(db);
   vi.mocked(createContentDraft).mockImplementation(fakeCreateDraft(db) as never);
   vi.mocked(updateContentDraft).mockImplementation(fakeUpdateContentDraft(db) as never);
+  vi.mocked(setContentDraftReady).mockImplementation(fakeSetDraftReady(db) as never);
+  // The Content Agent's suggestions in the editor beside the chat (W4-14): the page doesn't change.
+  vi.mocked(suggestDraftChanges).mockImplementation(async () => ({ ok: true, count: 2 }));
   vi.mocked(createContentDraftFor).mockImplementation((_actor, brandId, start) =>
     fakeCreateDraft(db)(brandId, start),
   );
@@ -828,6 +844,48 @@ describe('going live on its own (AUTONOMOUS-GO-LIVE §5.4)', () => {
     });
   });
 
+  it('sends a page to the brand’s webhook through the same route, with no address (PR 11)', async () => {
+    const webhook = () =>
+      request({
+        tool: chatTool('trigger_content_webhook')!,
+        input: INPUTS.trigger_content_webhook,
+      });
+    expect(await runLoggedWrite(webhook())).toMatchObject({
+      code: 'ok',
+      output: { ok: true, target: 'webhook', status: 'sent' },
+    });
+    const body = JSON.parse((sent.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body).toMatchObject({ kind: 'webhook', target: 'webhook', draftId: DRAFT });
+    expect(db.tables.chat_activity_log).toEqual([
+      expect.objectContaining({ tool_key: 'sendToWebhook', auto_via: 'go_live', undo_json: null }),
+    ]);
+    // A brand without a webhook: said as not connected, in words that name it.
+    sent.mockImplementationOnce(async () =>
+      Response.json(
+        { success: false, code: 'no_webhook', message: 'No workflow connected' },
+        { status: 409 },
+      ),
+    );
+    expect(await runLoggedWrite(webhook())).toMatchObject({
+      output: {
+        ok: false,
+        reason: 'not_connected',
+        message: 'Your webhook refused it: No workflow connected',
+      },
+    });
+    // Sent there already by this agent: a webhook send isn't an update, so it never goes twice.
+    sent.mockImplementationOnce(async () =>
+      Response.json({ success: false, code: 'already_sent' }, { status: 409 }),
+    );
+    expect(await runLoggedWrite(webhook())).toMatchObject({
+      output: {
+        ok: false,
+        reason: 'conflict',
+        message: 'This page went to your webhook already. An agent sends it there once.',
+      },
+    });
+  });
+
   it('frees its slot when the API has no secret to be reached with: nothing went', async () => {
     vi.stubEnv('CRON_SECRET', '');
     const finished: unknown[] = [];
@@ -1330,6 +1388,7 @@ describe('content, reports and Site Audit, by role and mode (W2-07, CHAT-20 §9 
     expect(CHAT_TOOLS.filter((tool) => tool.class === 'execute').map((tool) => tool.name)).toEqual([
       'push_cms_draft',
       'publish_cms',
+      'trigger_content_webhook',
       'unpublish_cms',
     ]);
     const publish = chatTool('publish_cms')!;
@@ -1352,12 +1411,13 @@ describe('saving a skill, by role and mode (W3-06, CHAT-20 §9 row 75)', () => {
     return decideToolCall(tool, ctx!, call);
   }
 
-  it('Admins and Managers, from a card unless Full auto; Analysts and Agency partners are refused', async () => {
+  it('Admins and Managers, from its draft card in every mode (W3-08); Analysts and Agency partners are refused', async () => {
     db.tables.profiles.push({ id: AGENCY, role: 'agency_partner', organization_id: ORG });
     for (const userId of [PEOPLE.admin, PEOPLE.manager]) {
-      expect(await decide(userId, 'ask_first')).toMatchObject({ kind: 'ask' });
-      expect(await decide(userId, 'auto')).toMatchObject({ kind: 'ask' });
-      expect(await decide(userId, 'full_auto')).toEqual({ kind: 'run', via: 'full_auto' });
+      // Nothing is kept before Save: Full auto shows the card too.
+      for (const mode of ['ask_first', 'auto', 'full_auto'] as const) {
+        expect(await decide(userId, mode)).toMatchObject({ kind: 'ask' });
+      }
     }
     for (const userId of [PEOPLE.analyst, AGENCY]) {
       for (const mode of ['ask_first', 'auto', 'full_auto'] as const) {
@@ -1369,16 +1429,16 @@ describe('saving a skill, by role and mode (W3-06, CHAT-20 §9 row 75)', () => {
     }
   });
 
-  it('shows its card even in Full auto once outside text, an imported skill too, shaped it (§16a)', async () => {
+  it('shows its card in Full auto when outside text, an imported skill too, shaped it (§16a): its draft card comes first', async () => {
     expect(await decide(PEOPLE.admin, 'full_auto', true)).toMatchObject({
       kind: 'ask',
-      reason: 'tainted',
+      reason: 'always_card',
     });
   });
 
   it('is in the Activity log, and Undo deletes it while it is still private and as saved', async () => {
     const tool = chatTool('save_skill')!;
-    await runAs(PEOPLE.admin, tool, 'full_auto');
+    await runAs(PEOPLE.admin, tool, 'full_auto', { approved: true });
     const [log] = db.tables.chat_activity_log;
     const [saved] = db.tables.chat_skills;
     expect(log).toMatchObject({

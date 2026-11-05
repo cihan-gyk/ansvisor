@@ -175,6 +175,7 @@ describe('saveMemory (items 7, 10, 12, 19, 25)', () => {
         scope: 'user',
         text: 'Write blog posts in US English',
         replaced: false,
+        brandName: null,
       },
     });
     expect(live()).toEqual([
@@ -498,8 +499,11 @@ describe('the Memory page’s list (items 21, 24, 25)', () => {
     seedLine({ user_id: PEOPLE.analyst, text: 'Not mine' });
     seedLine({ scope: 'brand', user_id: null, brand_id: BRAND, text: 'Say Northwind CRM' });
     seedLine({ scope: 'workspace', user_id: null, text: 'House style: AP' });
+    db.tables.brands[0].brand_rules = ['No topics comparing us with a named competitor'];
     const list = await store.listMemory(await viewer(PEOPLE.manager), BRAND);
     expect(list.brand).toEqual({ id: BRAND, name: 'Northwind' });
+    // Read-only, outside the brand's 4,000 (Wave 3 decision 14).
+    expect(list.brandRules).toEqual(['No topics comparing us with a named competitor']);
     expect(list.items.user.map((i) => i.text)).toEqual(['Write in US English']);
     expect(list.items.brand.map((i) => i.can)).toEqual([{ edit: true, remove: true }]);
     expect(list.items.workspace.map((i) => i.can)).toEqual([{ edit: false, remove: false }]);
@@ -510,6 +514,7 @@ describe('the Memory page’s list (items 21, 24, 25)', () => {
 
     const analyst = await store.listMemory(await viewer(PEOPLE.analyst), null);
     expect(analyst.brand).toBeNull();
+    expect(analyst.brandRules).toEqual([]);
     expect(analyst.items.user.map((i) => i.text)).toEqual(['Not mine']);
     expect(analyst.rights).toEqual({ user: 'edit', brand: null, workspace: null });
   });
@@ -537,6 +542,53 @@ describe('the switches (item 24)', () => {
     expect(await store.setMemorySwitches(await viewer(PEOPLE.admin), { workspace: false })).toEqual(
       { ok: true, value: { workspace: false, personal: true } },
     );
+  });
+});
+
+describe('"Remember this?" (item 9, W4-33)', () => {
+  const CHAT = 'eeeeeeee-0000-4000-8000-000000000001';
+  const run = {
+    conversationId: CHAT,
+    question: 'From now on, write blog posts in US English.',
+    flagged: null,
+    attended: true,
+    handled: false,
+    existing: [],
+  };
+  const actor = { userId: PEOPLE.manager, organizationId: ORG };
+  beforeEach(() => {
+    db.tables.chat_runs = [{ id: 'run-1', conversation_id: CHAT }];
+    db.tables.chat_run_events = [];
+  });
+
+  it('offers the line once a conversation, while memory is on and the workspace writable', async () => {
+    expect(await store.rememberOfferFor(actor, run)).toBe(
+      'From now on, write blog posts in US English',
+    );
+    db.tables.chat_run_events.push({ run_id: 'run-1', type: 'remember.offered', seq: 9 });
+    expect(await store.rememberOfferedIn(CHAT)).toBe(true);
+    expect(await store.rememberOfferFor(actor, run)).toBeNull();
+  });
+
+  it('offers nothing with Use memory off, the workspace switch off, a read-only workspace or Chat off', async () => {
+    db.tables.chat_user_prefs = [{ user_id: PEOPLE.manager, memory_enabled: false }];
+    expect(await store.rememberOfferFor(actor, run)).toBeNull();
+    db.tables.chat_user_prefs = [];
+    db.tables.chat_settings = [{ organization_id: ORG, memory_enabled: false }];
+    expect(await store.rememberOfferFor(actor, run)).toBeNull();
+    db.tables.chat_settings = [];
+    db.tables.organizations[0].subscription_status = 'canceled';
+    expect(await store.rememberOfferFor(actor, run)).toBeNull();
+    db.tables.organizations[0].subscription_status = 'active';
+    vi.stubEnv('CHAT_AGENTIC', 'false');
+    expect(await store.rememberOfferFor(actor, run)).toBeNull();
+  });
+
+  it('offers nothing when it can’t tell, rather than twice', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    db.failures.chat_run_events = { message: 'down' };
+    expect(await store.rememberOfferFor(actor, run)).toBeNull();
+    error.mockRestore();
   });
 });
 

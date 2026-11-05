@@ -26,13 +26,12 @@ const getReportBranding = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/actions/white-label', () => ({ getReportBranding }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast }));
-vi.mock('./_report-pdf', () => ({ ReportPdfDocument: () => null }));
-/** The props of each document handed to the renderer. */
+/** The report and the kit of each PDF drawn. */
 const drawn = vi.hoisted(() => [] as unknown[]);
-vi.mock('@react-pdf/renderer', () => ({
-  pdf: (document: { props: unknown }) => {
-    drawn.push(document.props);
-    return { toBlob: async () => new Blob(['%PDF']) };
+vi.mock('./_report-pdf', () => ({
+  reportPdf: async (report: unknown, branding: unknown) => {
+    drawn.push({ report, branding });
+    return new Blob(['%PDF']);
   },
 }));
 // jsdom draws no canvas: the logos here are PNGs, handed over as they are.
@@ -149,5 +148,53 @@ describe('ReportDetailPage with white label', () => {
     await render();
     await download();
     expect(downloaded).toEqual(['acme-agency_northwind_report_2026-10-31.pdf']);
+  });
+});
+
+describe('ReportDetailPage › Site Audit Score', () => {
+  const auditCard = () =>
+    [...container.querySelectorAll('[data-slot="card"]')].find((c) =>
+      c.textContent?.startsWith('Site Audit Score'),
+    );
+
+  it('shows the score in points, and the change since the same page’s audit before', async () => {
+    getReport.mockResolvedValue({
+      ...report,
+      payload: {
+        ...report.payload,
+        auditScore: {
+          url: 'https://shop.com/bags',
+          totalScore: 64,
+          previousScore: 60,
+          auditedAt: '2026-10-30T00:00:00Z',
+          scale: 100,
+        },
+      },
+    });
+    await render();
+    const card = auditCard()!;
+    expect(card.textContent).toContain('64+4');
+    expect(card.textContent).not.toContain('%');
+    expect(card.textContent).toContain('https://shop.com/bags');
+  });
+
+  it('shows a report saved on the 0–1 scale as about that many points, with no change', async () => {
+    getReport.mockResolvedValue({
+      ...report,
+      payload: {
+        ...report.payload,
+        auditScore: {
+          url: 'https://shop.com/bags',
+          totalScore: 0.6,
+          previousScore: 0.5,
+          auditedAt: '2026-10-30T00:00:00Z',
+        },
+      },
+    });
+    await render();
+    const card = auditCard()!;
+    expect(card.textContent).toContain('~60');
+    expect(card.textContent).not.toContain('0.6');
+    expect(card.textContent).not.toMatch(/[+-]\d/);
   });
 });

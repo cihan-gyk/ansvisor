@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { PLANS } from '@/config/plans';
+import { readChosenTimeZone } from '@/lib/account-time-zone';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import type { AgentFormSetup } from './agent-form';
 import { readGoLiveSwitch } from './agent-go-live';
@@ -13,9 +14,9 @@ import { chatActor } from './run-api';
  * form opens, read on the server for the signed-in person: their live role,
  * the brands and topics a scope may name, the plan's engines, whether Full
  * auto is open, locked by the plan or turned off in Settings › Chat, the
- * workspace's Max per run and sharing rule, the names already taken and
- * whose key Chat runs on. Never a price or a dollar: shares and names only.
- * Server only.
+ * workspace's Max per run and sharing rule, the names already taken, whose
+ * key Chat runs on and the time zone they picked in Settings › Account.
+ * Never a price or a dollar: shares and names only. Server only.
  */
 
 /** Topics a scope lists at most. */
@@ -23,11 +24,11 @@ const TOPICS_MAX = 500;
 
 export async function agentFormSetupFor(ctx: AgentContext): Promise<AgentFormSetup> {
   const org = ctx.actor.organizationId;
-  const [brands, agents, ownKeyProvider, goLive] = await Promise.all([
+  const [brands, agents, ownKeyProvider, goLive, timeZone] = await Promise.all([
     supabaseAdmin.from('brands').select('id, name, is_demo').eq('organization_id', org),
     supabaseAdmin
       .from('chat_agents')
-      .select('name, visibility, owner_id')
+      .select('id, name, visibility, owner_id, status')
       .eq('organization_id', org),
     resolveChatModelKey(org)
       .then((resolved) => (resolved?.source === 'own' ? resolved.config.provider : null))
@@ -38,6 +39,7 @@ export async function agentFormSetupFor(ctx: AgentContext): Promise<AgentFormSet
         return null;
       }),
     readGoLiveSwitch(org),
+    readChosenTimeZone(ctx.actor.userId),
   ]);
   if (brands.error) throw new Error(`Could not read the brands: ${brands.error.message}`);
   if (agents.error) throw new Error(`Could not read the agents' names: ${agents.error.message}`);
@@ -71,10 +73,23 @@ export async function agentFormSetupFor(ctx: AgentContext): Promise<AgentFormSet
     fullAutoDenial?.denial.code === 'plan_locked' ? fullAutoDenial.denial.needs : 'growth';
   const me = ctx.actor.userId;
   const admin = ctx.viewer.role === 'admin';
-  const seen = ((agents.data ?? []) as { name: string; visibility: string; owner_id: string }[])
+  const visible = (
+    (agents.data ?? []) as {
+      id: string;
+      name: string;
+      visibility: string;
+      owner_id: string;
+      status: string;
+    }[]
+  )
     // Admins see every agent; others theirs and the workspace's (§K item 51).
-    .filter((a) => admin || a.visibility === 'workspace' || a.owner_id === me)
-    .map((a) => a.name);
+    .filter((a) => admin || a.visibility === 'workspace' || a.owner_id === me);
+  const seen = visible.map((a) => a.name);
+  // Can call's choices: the ones on or paused (CHAT-27 item 14), by name.
+  const callable = visible
+    .filter((a) => a.status === 'active' || a.status === 'paused')
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(({ id, name }) => ({ id, name }));
 
   return {
     role: ctx.viewer.role,
@@ -93,6 +108,9 @@ export async function agentFormSetupFor(ctx: AgentContext): Promise<AgentFormSet
     takenNames: seen,
     ownKeyProvider,
     goLive,
+    timeZone,
+    callable,
+    canCallLocked: !ctx.plan.fullAuto,
   };
 }
 

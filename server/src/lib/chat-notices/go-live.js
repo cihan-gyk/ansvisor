@@ -31,7 +31,7 @@ const CMS_NAMES = {
 };
 
 /** One row, or null; a read that fails throws. */
-async function one(query) {
+export async function one(query) {
   const { data, error } = await query.maybeSingle();
   if (error) throw new Error(error.message);
   return data;
@@ -49,7 +49,7 @@ async function notifyViaOf(ids) {
 }
 
 /** The members of the workspace among `ids`, each once. */
-async function membersOf(orgId, ids) {
+export async function membersOf(orgId, ids) {
   const wanted = [...new Set(ids.filter(Boolean))];
   if (wanted.length === 0) return [];
   const { data, error } = await supabaseAdmin
@@ -65,7 +65,7 @@ async function membersOf(orgId, ids) {
  * Writes one notice per person (unique by person and `dedupe`), then sends
  * the e-mail to those it was new for who want e-mail. What went out.
  */
-async function tell({ orgId, people, kind, payload, dedupe, brandId = null, email }) {
+export async function tell({ orgId, people, kind, payload, dedupe, brandId = null, email }) {
   if (people.length === 0) return { notices: 0, emails: 0 };
   const { data: written, error } = await supabaseAdmin
     .from('chat_notices')
@@ -98,12 +98,12 @@ async function tell({ orgId, people, kind, payload, dedupe, brandId = null, emai
   return { notices: told.size, emails };
 }
 
-const BUTTON =
+export const BUTTON =
   'background:#111827;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;font-size:14px;display:inline-block;margin-right:8px;';
 const LINK_BUTTON =
   'background:#ffffff;color:#111827;text-decoration:none;padding:9px 17px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;display:inline-block;';
 
-function frame(title, lines, buttons, footer) {
+export function frame(title, lines, buttons, footer) {
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;">
   <h1 style="font-size:18px;color:#111827;margin:0 0 8px 0;">${title}</h1>
   ${lines.map((line) => `<p style="font-size:14px;color:#111827;margin:0 0 16px 0;">${line}</p>`).join('\n  ')}
@@ -141,9 +141,13 @@ export function renderWentLiveEmail({
   const cms = CMS_NAMES[target] ?? target;
   const origin = appOrigin();
   const site = kind === 'publish' && url ? siteOf(url) : null;
+  // A webhook send (PR 11): the workspace's workflow takes it from there, and Ansvisor can't take it back.
+  const webhook = kind === 'webhook';
   const subject = site
     ? `${agent} published “${title}” on ${site}`
-    : `${agent} sent “${title}” to ${cms} as a draft`;
+    : webhook
+      ? `${agent} sent “${title}” to your webhook`
+      : `${agent} sent “${title}” to ${cms} as a draft`;
   const html = frame(
     escapeHtml(subject),
     site
@@ -151,10 +155,15 @@ export function renderWentLiveEmail({
           `${escapeHtml(agent)} published the ${escapeHtml(brand)} page “${escapeHtml(title)}” on ${escapeHtml(site)} through ${escapeHtml(cms)}, without a click. An Admin allowed this agent to publish and send on its own.`,
           'It passed Quality and your brand facts first. It is live now: check it, and if it shouldn’t be, use Take down on its notice in your Chat Inbox.',
         ]
-      : [
-          `${escapeHtml(agent)} sent the ${escapeHtml(brand)} page “${escapeHtml(title)}” to ${escapeHtml(cms)} as a draft, without a click. An Admin allowed this agent to publish and send on its own.`,
-          `It passed Quality and your brand facts first. Nothing is live yet: the page waits in ${escapeHtml(cms)} as a draft.`,
-        ],
+      : webhook
+        ? [
+            `${escapeHtml(agent)} sent the ${escapeHtml(brand)} page “${escapeHtml(title)}” to your webhook, without a click. An Admin allowed this agent to publish and send on its own.`,
+            'It passed Quality and your brand facts first. Ansvisor can’t take a webhook send back: your workflow decides what happens to it.',
+          ]
+        : [
+            `${escapeHtml(agent)} sent the ${escapeHtml(brand)} page “${escapeHtml(title)}” to ${escapeHtml(cms)} as a draft, without a click. An Admin allowed this agent to publish and send on its own.`,
+            `It passed Quality and your brand facts first. Nothing is live yet: the page waits in ${escapeHtml(cms)} as a draft.`,
+          ],
     [
       site
         ? `<a href="${escapeHtml(url)}" style="${BUTTON}">Open the live page</a>`

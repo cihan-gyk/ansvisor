@@ -16,6 +16,7 @@ import type { ChatMode } from '../precedence';
 import { readPrecedenceContext } from '../precedence-context';
 import { RUNS_PER_USER, claimRunSlot, readRunCounts, workspaceRunLimit } from '../run-limits';
 import { enabledSkillsFor, loadSkillBodies } from '../skills/store';
+import { closeJobNotices, keepRunResult, noticeJobPaused, type PausedReason } from './deliver';
 import { nextJobRun } from './rule';
 
 /**
@@ -72,8 +73,8 @@ export const HANDOVER_GRACE_MS = 5 * 60_000;
 const TICK_ROWS = 200;
 
 const JOB_COLUMNS =
-  'id, organization_id, kind, run_mode, due_at, next_run_at, rrule, timezone, title, prompt, skill_name, brand_id, created_by, conversation_id, mode, enabled, paused_reason, fail_count, retry_at';
-const RUN_COLUMNS = 'id, schedule_id, slot_at, attempt, run_id, status, started_at';
+  'id, organization_id, kind, run_mode, due_at, next_run_at, rrule, timezone, title, prompt, skill_name, brand_id, created_by, conversation_id, mode, enabled, paused_reason, fail_count, retry_at, change_only, last_fingerprint';
+const RUN_COLUMNS = 'id, schedule_id, slot_at, attempt, run_now, run_id, status, started_at';
 
 /** Run statuses still open: working, waiting on a person, or held at the AI limit. */
 const OPEN_RUN = ['running', 'needs_you', 'paused_cap'] as const;
@@ -100,6 +101,9 @@ export interface JobRow {
   paused_reason: string | null;
   fail_count: number;
   retry_at: string | null;
+  /** "Notify only if the answer changed" (CHAT-12 item 20), and what its last delivered run read. */
+  change_only?: boolean;
+  last_fingerprint?: string | null;
 }
 
 interface RunRow {
@@ -107,6 +111,7 @@ interface RunRow {
   schedule_id: string;
   slot_at: string;
   attempt: number;
+  run_now?: boolean;
   run_id: string | null;
   status: string;
   started_at: string;
@@ -261,7 +266,10 @@ async function pauseJob(jobId: string, reason: JobPauseReason): Promise<boolean>
     .eq('enabled', true)
     .select('id');
   if (error) throw new Error(`Could not pause a scheduled job: ${error.message}`);
-  return (data ?? []).length > 0;
+  const paused = (data ?? []).length > 0;
+  // Its creator is told at the top of their Inbox (W3-04a).
+  if (paused) await noticeJobPaused(jobId, reason as PausedReason);
+  return paused;
 }
 
 /**
@@ -272,7 +280,7 @@ async function pauseJob(jobId: string, reason: JobPauseReason): Promise<boolean>
 async function moveRunRow(
   runId: string,
   from: string,
-  to: 'done' | 'failed' | 'paused_cap' | 'skipped' | 'needs_you' | 'running',
+  to: 'done' | 'unchanged' | 'failed' | 'paused_cap' | 'skipped' | 'needs_you' | 'running',
   { reason = null, now, held = false }: { reason?: string | null; now: Date; held?: boolean },
 ): Promise<boolean> {
   const { data, error } = await supabaseAdmin
@@ -544,7 +552,12 @@ async function openJobRun(
       model: 'auto',
       effort: 'normal',
       status: 'queued',
-      progress: { scope, scheduled: true },
+      progress: {
+        scope,
+        scheduled: true,
+        // Change-only: what its last delivered run read, to stop on No change (CHAT-12 item 20).
+        ...(job.change_only ? { changeOnly: { last: job.last_fingerprint ?? null } } : {}),
+      },
       now,
     });
   }
@@ -636,6 +649,69 @@ async function fireDueRun(
   await driver(opened);
 }
 
+/** What Run now came to (W3-03): started, waiting for a free run slot, refused (with why), or gone. */
+export type RunNowResult =
+  | { kind: 'started' }
+  | { kind: 'busy' }
+  | { kind: 'refused'; reason: string }
+  | { kind: 'gone' };
+
+/**
+ * Run now (CHAT-12 item 23): one run of the job at once, outside its slots
+ * (its row run_now, its slot the click's time), with the checks a due run
+ * has; its next slot stays as it is. A job that is off runs too: its
+ * checks still refuse what a turned-off job couldn't do.
+ */
+export async function runJobNow(
+  jobId: string,
+  now: Date = new Date(),
+  driver: ScheduleRunDriver = scheduleRunDriver,
+): Promise<RunNowResult> {
+  const { data, error } = await supabaseAdmin
+    .from('chat_schedules')
+    .select(JOB_COLUMNS)
+    .eq('id', jobId)
+    .maybeSingle();
+  if (error) throw new Error(`Could not read a scheduled job: ${error.message}`);
+  const job = data as JobRow | null;
+  if (!job || job.kind === 'followup_check') return { kind: 'gone' };
+  const plan = (await readJobOrgs([job.organization_id])).get(job.organization_id);
+  if (!plan) return { kind: 'gone' };
+  if (!plan.writable) return { kind: 'refused', reason: reasonWords('readOnly') };
+  if (!(await hasRoom(job, plan))) return { kind: 'busy' };
+  const due: DueRun = { job, slot: now.toISOString(), attempt: 1, by: 'next' };
+  const { data: row, error: rowError } = await supabaseAdmin
+    .from('chat_schedule_runs')
+    .insert({
+      schedule_id: job.id,
+      slot_at: due.slot,
+      attempt: 1,
+      run_now: true,
+      status: 'running',
+      started_at: now.toISOString(),
+    })
+    .select('id')
+    .single();
+  if (rowError || !row) {
+    throw new Error(`Could not start a scheduled run: ${rowError?.message ?? 'no row'}`);
+  }
+  const runRowId = (row as { id: string }).id;
+  const checked = await checkJob(job, runRowId);
+  if (!checked.ok) {
+    const reason = reasonWords(checked.refusal.reason, job.skill_name);
+    await moveRunRow(runRowId, 'running', checked.refusal.status, { reason, now });
+    if (checked.refusal.pause) await pauseJob(job.id, checked.refusal.pause);
+    return { kind: 'refused', reason };
+  }
+  const opened = await openJobRun(job, due, runRowId, checked.facts, now);
+  if (!opened) {
+    await moveRunRow(runRowId, 'running', 'failed', { reason: reasonWords('failed'), now });
+    return { kind: 'refused', reason: reasonWords('failed') };
+  }
+  await driver(opened);
+  return { kind: 'started' };
+}
+
 /**
  * Runs every job that is due (above): in workspaces where Chat is on, one
  * job's failure apart from the others'. Answers what the round did.
@@ -668,7 +744,7 @@ export async function fireDueJobs(now: Date, driver: ScheduleRunDriver): Promise
  * stopped it or no card was answered in 7 days. Pure.
  */
 export function scheduleRunStateOf(chat: Pick<LoadedRun, 'status' | 'progress'>): {
-  status: 'running' | 'needs_you' | 'paused_cap' | 'done' | 'failed' | 'skipped';
+  status: 'running' | 'needs_you' | 'paused_cap' | 'done' | 'unchanged' | 'failed' | 'skipped';
   reason?: Reason;
 } {
   switch (chat.status) {
@@ -677,7 +753,8 @@ export function scheduleRunStateOf(chat: Pick<LoadedRun, 'status' | 'progress'>)
     case 'paused_cap':
       return { status: 'paused_cap', reason: 'aiLimit' };
     case 'done':
-      return { status: 'done' };
+      // Read what its last delivered run read: No change, nothing sent (CHAT-12 item 20).
+      return { status: chat.progress?.unchanged ? 'unchanged' : 'done' };
     case 'error':
       return { status: 'failed', reason: 'failed' };
     case 'stopped': {
@@ -697,7 +774,12 @@ export function scheduleRunStateOf(chat: Pick<LoadedRun, 'status' | 'progress'>)
  * (failed). A job a person turned off meanwhile keeps their reason. Moved
  * only from what was read, so two settles at once count once.
  */
-async function countRun(jobId: string, attempt: number, failed: boolean, now: Date) {
+async function countRun(
+  jobId: string,
+  attempt: number,
+  failed: boolean,
+  now: Date,
+): Promise<boolean> {
   for (let tries = 0; tries < 3; tries++) {
     const { data, error } = await supabaseAdmin
       .from('chat_schedules')
@@ -705,11 +787,11 @@ async function countRun(jobId: string, attempt: number, failed: boolean, now: Da
       .eq('id', jobId)
       .maybeSingle();
     if (error) throw new Error(`Could not read a scheduled job: ${error.message}`);
-    if (!data) return;
+    if (!data) return false;
     const { enabled } = data as { enabled: boolean };
     const before = Number((data as { fail_count: number }).fail_count) || 0;
     const after = failed ? before + 1 : 0;
-    if (after === before) return;
+    if (after === before) return enabled;
     const patch =
       !failed || !enabled
         ? { fail_count: after }
@@ -728,8 +810,14 @@ async function countRun(jobId: string, attempt: number, failed: boolean, now: Da
       .eq('enabled', enabled)
       .select('id');
     if (moveError) throw new Error(`Could not count a scheduled run: ${moveError.message}`);
-    if ((moved ?? []).length > 0) return;
+    if ((moved ?? []).length > 0) {
+      const off = 'enabled' in patch && patch.enabled === false;
+      // Its creator is told it turned off (W3-04a).
+      if (off) await noticeJobPaused(jobId, 'failed', now);
+      return enabled && !off;
+    }
   }
+  return true;
 }
 
 /**
@@ -753,26 +841,39 @@ export async function settleScheduleRun(
 
   let target: ReturnType<typeof scheduleRunStateOf>;
   let held = false;
+  let chat: LoadedRun | null = null;
   if (!run.run_id) {
     // Claimed, never handed to Chat: its worker was lost before the run was made.
     if (now.getTime() - Date.parse(run.started_at) <= HANDOVER_GRACE_MS) return run.status;
     target = { status: 'failed', reason: 'lost' };
   } else {
-    const chat = await loadRun(run.run_id);
+    chat = await loadRun(run.run_id);
     target = chat ? scheduleRunStateOf(chat) : { status: 'failed', reason: 'lost' };
     // Held at the limit: its row stays open until the job goes on (resumeCapPausedJobs).
     held = chat?.status === 'paused_cap';
   }
   if (target.status === run.status && (held || target.status !== 'paused_cap')) {
+    // Still working: its "1 of 3 ready" follows the parts it made so far.
+    if (chat && target.status !== 'paused_cap') {
+      await keepRunResult(run, target.status, chat, { now });
+    }
     return run.status;
   }
   const reason = target.reason ? reasonWords(target.reason) : null;
   if (!(await moveRunRow(run.id, run.status, target.status, { reason, now, held }))) {
     return null;
   }
+  let jobOn = true;
   if (target.status === 'paused_cap') await pauseJob(run.schedule_id, 'cap');
-  if (target.status === 'done') await countRun(run.schedule_id, run.attempt, false, now);
-  if (target.status === 'failed') await countRun(run.schedule_id, run.attempt, true, now);
+  // A Run now is outside the job's slots: it isn't retried or counted toward its failed runs.
+  if (!run.run_now && (target.status === 'done' || target.status === 'unchanged')) {
+    jobOn = await countRun(run.schedule_id, run.attempt, false, now);
+  }
+  if (!run.run_now && target.status === 'failed') {
+    jobOn = await countRun(run.schedule_id, run.attempt, true, now);
+  }
+  // Its parts, fingerprint and notices (W3-04a: deliver.ts).
+  await keepRunResult(run, target.status, chat, { reason, jobOn, now });
   return target.status;
 }
 
@@ -856,6 +957,8 @@ async function resumeJob(job: JobRow, now: Date): Promise<boolean> {
     .select('id');
   if (error) throw new Error(`Could not resume a scheduled job: ${error.message}`);
   if ((data ?? []).length === 0) return false;
+  // On again: the notice that it paused closes (W3-04a).
+  await closeJobNotices(job.id, now);
   // Its run held at the limit stops: the next slot runs, not the held run.
   const { data: held, error: heldError } = await supabaseAdmin
     .from('chat_schedule_runs')

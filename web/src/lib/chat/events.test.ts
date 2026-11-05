@@ -134,6 +134,8 @@ const SAMPLES: { [K in ChatEventType]: () => Extract<ChatEvent, { type: K }> } =
     chatEvent('next_moves', 8, {
       moves: [{ label: 'Turn this into actions', prompt: 'Turn these findings into actions' }],
     }),
+  'remember.offered': () =>
+    chatEvent('remember.offered', 9, { text: 'Blog posts use US English spelling' }),
   'usage.updated': () => chatEvent('usage.updated', 9, { percentUsed: 44, runPercent: 0.3 }),
   'run.finished': () =>
     chatEvent('run.finished', 10, {
@@ -178,10 +180,36 @@ const SAMPLES: { [K in ChatEventType]: () => Extract<ChatEvent, { type: K }> } =
       total: 1,
       due: 1,
     }),
-  'deliverable.updated': () => chatEvent('deliverable.updated', 13, { ...DELIVERABLE, version: 2 }),
+  'deliverable.updated': () =>
+    chatEvent('deliverable.updated', 13, {
+      ...DELIVERABLE,
+      version: {
+        n: 2,
+        counts: { questions: 7, sections: 7, characters: 905 },
+        changes: {
+          shortened: [{ heading: 'Can I change plans?', before: 212, after: 140 }],
+          added: ['Can I get a refund?'],
+          placeholders: ['[REFUND PERIOD]'],
+        },
+        sections: [{ heading: 'Can I get a refund?', text: 'Yes, within [REFUND PERIOD].' }],
+        canUndo: true,
+      },
+    }),
   'suggestion.created': () => chatEvent('suggestion.created', 14, { count: 3 }),
   'suggestion.resolved': () => chatEvent('suggestion.resolved', 15, { count: 1 }),
   'page.opened': () => chatEvent('page.opened', 16, { where: 'here', href: EDITOR }),
+  'whats_new.ready': () =>
+    chatEvent('whats_new.ready', 17, {
+      entries: [
+        {
+          slug: 'agent-center',
+          feature: 'Agent Center',
+          lines: ['Why.', 'What.', 'How it helps.'],
+          href: '/dashboard/agents',
+          onPlans: 'Growth and Enterprise',
+        },
+      ],
+    }),
 };
 
 /** Every key in a type, at any depth. */

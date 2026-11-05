@@ -39,6 +39,18 @@ const getBrandFacts = vi.fn();
 const checkDraftLinks = vi.fn();
 const getSiteTrust = vi.fn();
 // No white label kit: downloads keep Ansvisor's names (export-name.test.ts has a kit's).
+// Chat beside the page (W4-16): the panel's setup when a test gives one, and the tab as a stub.
+const chatPanel = vi.hoisted(() => ({ value: null as unknown }));
+vi.mock('@/components/chat/panel/chat-panel-context', () => ({
+  useChatPanel: () => chatPanel.value,
+}));
+const editorChat = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
+vi.mock('@/components/chat/panel/editor-chat', () => ({
+  EditorChat: (props: Record<string, unknown>) => {
+    editorChat.props = props;
+    return <div data-slot="editor-chat" />;
+  },
+}));
 vi.mock('@/lib/actions/white-label', () => ({
   getExportBranding: async () => ({ ok: true, branding: null }),
 }));
@@ -1486,7 +1498,9 @@ describe('the content editor', () => {
 
   it('links the chat it was made in, with the new Chat on (W4-10)', async () => {
     const CHAT = 'cccccccc-0000-4000-8000-000000000001';
-    getContentDraft.mockResolvedValue(draft({ conversation: { id: CHAT, title: 'Pricing FAQ' } }));
+    getContentDraft.mockResolvedValue(
+      draft({ conversation: { id: CHAT, title: 'Pricing FAQ', mine: true } }),
+    );
     await renderPage('admin', { chatOn: true });
     const bar = container.querySelector('[data-slot="draft-chat-bar"]')!;
     expect(bar.textContent).toBe('From chat: Pricing FAQ');
@@ -2371,6 +2385,19 @@ describe('the content editor', () => {
       expect(pageText()).not.toContain('Accuracy is shown');
     });
 
+    it('says a suggestion came from a request typed in Chat beside the editor (W4-14)', async () => {
+      getContentDraft.mockResolvedValue(page);
+      getDraftSuggestions.mockResolvedValue([
+        { ...batch[0], ruleKeys: ['chat'], reason: 'shorten answer 3' },
+        batch[1],
+      ]);
+      await renderPage();
+      expect(cardOf('s1')!.textContent).toContain(
+        'Content Agent · from your chat · shorten answer 3',
+      );
+      expect(cardOf('s2')!.textContent).not.toContain('from your chat');
+    });
+
     it('reviews the first open suggestion: scrolls to it and marks it for a moment', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const scrolled = vi.fn();
@@ -3062,6 +3089,56 @@ describe('the side panel', () => {
     expect(getContentImpact).toHaveBeenCalledWith('b1', 'https://acme.example.com/pricing', 30);
     expect(getContentResults).toHaveBeenCalledWith('b1', 'https://acme.example.com/pricing', 30);
     expect(button('Hide side panel')!.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('puts Chat first with the new Chat on, opens a chat-made draft on it, and Ctrl J opens it (W4-16)', async () => {
+    const CHAT = 'cccccccc-0000-4000-8000-000000000001';
+    chatPanel.value = { setup: { enabled: true } };
+    getContentDraft.mockResolvedValue(
+      draft({ conversation: { id: CHAT, title: 'Pricing FAQ', mine: true } }),
+    );
+    localStorage.setItem('aeo:content-editor-panel', '1');
+    try {
+      await renderPage('admin', { chatOn: true });
+      const tabs = [...panel()!.querySelectorAll('[role="tab"]')].map(tabName);
+      expect(tabs).toEqual(['Chat', 'Instructions', 'Sources', 'Live page']);
+      expect(selectedTab()).toBe('Chat');
+      expect(editorChat.props).toMatchObject({
+        draftId: 'd1',
+        conversation: { id: CHAT, title: 'Pricing FAQ', mine: true },
+      });
+      // The Content Agent's suggestions for a request typed there: the page reads them.
+      getDraftSuggestions.mockClear();
+      await act(async () => (editorChat.props!.onSuggestions as (n: number) => void)(2));
+      expect(getDraftSuggestions).toHaveBeenCalledWith('d1');
+
+      await pickTab('Instructions');
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true }));
+      });
+      expect(selectedTab()).toBe('Chat');
+    } finally {
+      chatPanel.value = null;
+      localStorage.removeItem('aeo:content-editor-panel');
+    }
+  });
+
+  it('opens on Instructions when a teammate’s shared chat made the draft (W4-16)', async () => {
+    const CHAT = 'cccccccc-0000-4000-8000-000000000001';
+    chatPanel.value = { setup: { enabled: true } };
+    getContentDraft.mockResolvedValue(
+      draft({ conversation: { id: CHAT, title: 'Pricing FAQ', mine: false } }),
+    );
+    localStorage.setItem('aeo:content-editor-panel', '1');
+    try {
+      await renderPage('manager', { chatOn: true });
+      const tabs = [...panel()!.querySelectorAll('[role="tab"]')].map(tabName);
+      expect(tabs).toEqual(['Chat', 'Instructions', 'Sources', 'Live page']);
+      expect(selectedTab()).toBe('Instructions');
+    } finally {
+      chatPanel.value = null;
+      localStorage.removeItem('aeo:content-editor-panel');
+    }
   });
 
   it('keeps its tabs down the right edge while closed, and opens on the one picked', async () => {
@@ -7273,6 +7350,22 @@ describe('the side panel', () => {
         expect(nextButton()!.getAttribute('aria-label')).toBe('Next · Fix open rules');
       });
 
+      it('asks the agent to shorten a long page of many sections, the Length being the person’s (editor UX review 2026-11-03, decision b)', async () => {
+        // Ten sections far past a Length of 400: a rewrite merges or drops
+        // sections to fit, so the Length is the agent's, not held.
+        const sections = Array.from(
+          { length: 10 },
+          (_, i) =>
+            `<h2>Section ${i + 1} on forecasting</h2><p>Teams trust the forecast because it reads the pipeline every day.</p>`,
+        ).join('');
+        getContentDraft.mockResolvedValue(
+          draft({ ...LONG, bodyHtml: `<h1>Pipeline forecasting</h1>${sections}` }),
+        );
+        getDraftSuggestions.mockResolvedValue([]);
+        await renderPage();
+        expect(nextButton()!.getAttribute('aria-label')).toBe('Next · Shorten to your Length');
+      });
+
       it('on the Length step, isn’t passed by a Fix, and is by a rewrite once decided', async () => {
         getContentDraft.mockResolvedValue(draft(LONG));
         getDraftSuggestions.mockResolvedValue([]);
@@ -7831,7 +7924,7 @@ describe('the side panel', () => {
       ).toContain('would break Max sentence length');
     });
 
-    it('tells a Fix run how far past its Length the page is when it doesn’t send the Length (#1552 review)', async () => {
+    it('sends the Length to Fix however far past it the page is, with the room it leaves (editor UX review 2026-11-03, decision b)', async () => {
       getContentDraft.mockResolvedValue({
         ...traced,
         rules: { set: null, source: null, overrides: { length: { value: '20' } }, textRules: [] },
@@ -7842,9 +7935,12 @@ describe('the side panel', () => {
       await act(async () => panelButton('Fix open rules').click());
       await act(async () => {});
       const sent = fixDraftRules.mock.calls[0][2];
-      // Far past its 20 characters, the Length is held from Fix: the hint says how far off the page is.
-      expect(sent.rules.map((r: { key: string }) => r.key)).not.toContain('length');
-      expect(sent.overLength).toEqual({ count: expect.any(Number), max: 24 });
+      // Far past its 20 characters, the Length is still the agent's (a rewrite
+      // may merge or drop sections), and the run is held to what it allows.
+      expect(sent.rules.map((r: { key: string }) => r.key)).toContain('length');
+      expect(sent.overLength).toBeUndefined();
+      expect(sent.lengthCap).toEqual({ count: expect.any(Number), max: 24 });
+      expect(sent.lengthCap.count).toBeGreaterThan(24);
     });
 
     it('says the month’s AI usage is used up before anything else, and runs nothing', async () => {
@@ -8751,10 +8847,11 @@ describe('the side panel', () => {
     const page = () => container.querySelector('.ProseMirror')!.textContent;
 
     it('reads what the last rewrite came to as the toolbar counts it, shown or decided since', async () => {
+      // Still longer than the rewrite came to (it wasn't taken): another won't get further.
       getContentDraft.mockResolvedValue(
         draft({
           pageType: 'blog_post',
-          bodyHtml: `<h1>Pipeline forecasting</h1><p>${'Teams forecast from the pipeline. '.repeat(12).trim()}</p>`,
+          bodyHtml: `<h1>Pipeline forecasting</h1><p>${'Teams forecast from the pipeline. '.repeat(40).trim()}</p>`,
           rules: {
             set: null,
             source: null,

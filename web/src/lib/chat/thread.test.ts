@@ -258,6 +258,52 @@ describe('loadChatThread', () => {
     ]);
   });
 
+  it('gives each page made in chat its version back, in the order it was filed (W4-12a)', async () => {
+    seed([{ id: 'run-1', status: 'done' }]);
+    fake.db.tables.chat_run_steps = [];
+    const version = (n: number) => ({
+      n,
+      counts: { questions: 3, sections: 3, characters: 905 },
+      changes: { shortened: [], added: [], placeholders: [] },
+      sections: [{ heading: 'Can I change plans?', text: 'Yes.' }],
+      ...(n > 1 ? { canUndo: true } : {}),
+    });
+    const page = (title: string, n: number, filed: 'in_files' | 'failed' = 'in_files') => ({
+      title,
+      type: 'document' as const,
+      formats: ['md' as const],
+      status: 'draft' as const,
+      href: `/dashboard/content/editor/${UUID}` as const,
+      filed,
+      version: version(n),
+    });
+    fake.db.tables.chat_run_events = [
+      event('run-1', chatEvent('deliverable.created', 1, page('FAQ: Pricing', 1))),
+      // A page Files didn't keep has no file to take its version.
+      event('run-1', chatEvent('deliverable.updated', 2, page('Lost', 2, 'failed'))),
+      event('run-1', chatEvent('deliverable.updated', 3, page('FAQ: Pricing', 2))),
+    ];
+    const made = (id: string, draft: string | null) => ({
+      id,
+      run_id: 'run-1',
+      message_id: null,
+      title: 'FAQ: Pricing',
+      type: 'document',
+      formats: ['md'],
+      status: 'draft',
+      content_draft_id: draft,
+      created_at: `2026-10-30T09:00:0${id.slice(-1)}.000Z`,
+    });
+    fake.db.tables.chat_files = [made('f1', UUID), made('f2', null), made('f3', UUID)];
+    const thread = await loadChatThread(CHAT);
+    expect(thread!.messages[1].run?.deliverables.map((d) => d.version?.n ?? null)).toEqual([
+      1,
+      null,
+      2,
+    ]);
+    expect(thread!.messages[1].run?.deliverables[2].version?.canUndo).toBe(true);
+  });
+
   it('opens the chat without its strip when the strip can’t be read', async () => {
     seed([{ id: 'run-1', status: 'done' }]);
     fake.db.tables.chat_run_steps = [];
@@ -296,6 +342,32 @@ describe('loadChatThread', () => {
       sent: [sent],
       summary: { workingMs: 3000, stepCount: 1, sources: [] },
     });
+  });
+
+  it('keeps "Remember this?" after a reload, in the author\'s own chat only (W4-33)', async () => {
+    seed([{ id: 'run-1', status: 'done' }]);
+    fake.db.tables.chat_run_steps = [];
+    fake.db.tables.chat_run_events = [
+      event('run-1', chatEvent('remember.offered', 1, { text: 'Blog posts use US English' })),
+    ];
+    const thread = await loadChatThread(CHAT);
+    expect(thread!.messages[1].run?.remember).toBe('Blog posts use US English');
+  });
+
+  it("keeps What's new's cards, after a reload (CHAT-11 item 10)", async () => {
+    seed([{ id: 'run-1', status: 'done' }]);
+    fake.db.tables.chat_run_steps = [];
+    const entries = [
+      {
+        slug: 'agent-center',
+        feature: 'Agent Center',
+        lines: ['Why.', 'What.', 'How it helps.'],
+        href: '/dashboard/agents' as const,
+      },
+    ];
+    fake.db.tables.chat_run_events = [event('run-1', chatEvent('whats_new.ready', 1, { entries }))];
+    const thread = await loadChatThread(CHAT);
+    expect(thread!.messages[1].run?.whatsNew).toEqual(entries);
   });
 
   it("keeps a stopped run's time and steps, its stopped step skipped with why", async () => {

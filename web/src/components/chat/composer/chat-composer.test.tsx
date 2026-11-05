@@ -265,6 +265,28 @@ describe('ChatComposer', () => {
     await render();
     expect(under()).toContain('Auto · Haiku reads, Sonnet writes');
   });
+
+  it('names the chat’s model and effort on the model button, and opens the model menu (W4-02)', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: false })));
+    vi.stubGlobal('fetch', fetchMock);
+    const onModelChoice = vi.fn();
+    await render({
+      modelChoice: { model: 'anthropic/claude-sonnet-5.5', effort: 'high' },
+      onModelChoice,
+    });
+    const open = button('Model')!;
+    expect(open.textContent).toBe('Sonnet 5.5 · High ▾');
+    await act(async () => open.click());
+    expect(open.getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelector('[data-slot="model-menu"]')).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/chat/models?selected=anthropic%2Fclaude-sonnet-5.5',
+    );
+    vi.unstubAllGlobals();
+
+    await render({ modelChoice: { model: 'auto', effort: 'normal' }, onModelChoice });
+    expect(button('Model')!.textContent).toBe('Auto · Haiku reads, Sonnet writes ▾');
+  });
 });
 
 describe('ChatComposer: a pasted API key (W4-05)', () => {
@@ -874,5 +896,66 @@ describe('ChatComposer: attached files (W1-13)', () => {
   it('attaches nothing without the page’s uploader', async () => {
     await render();
     expect(container.querySelector('input[type="file"]')).toBeNull();
+  });
+});
+
+describe('ChatComposer: own keys (W4-06)', () => {
+  const KEY = `sk-proj-${'Xy9_'.repeat(12)}`;
+  const action = (name: string) => container.querySelector<HTMLElement>(`[data-action="${name}"]`);
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ access: { state: 'plan' }, providers: [] }))),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('answers "use my OpenAI key" with the Add API key card, sending nothing to Chat', async () => {
+    await render({ keyForm: true });
+    await type('Please use my OpenAI key for Chat');
+    await press('Enter');
+    expect(handlers.onSend).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-slot="add-key-card"]')).not.toBeNull();
+    // The message stays: a misread loses nothing, and a second send sends it.
+    expect(box().value).toBe('Please use my OpenAI key for Chat');
+    await act(async () => action('addKey.close')!.click());
+    expect(container.querySelector('[data-slot="add-key-card"]')).toBeNull();
+    await press('Enter');
+    expect(handlers.onSend).toHaveBeenCalledWith(
+      'Please use my OpenAI key for Chat',
+      expect.anything(),
+    );
+  });
+
+  it('sends a question that only says "key", as "our key competitors"', async () => {
+    await render({ keyForm: true });
+    await type('Add our key competitors to the brief');
+    await press('Enter');
+    expect(container.querySelector('[data-slot="add-key-card"]')).toBeNull();
+    expect(handlers.onSend).toHaveBeenCalledWith(
+      'Add our key competitors to the brief',
+      expect.anything(),
+    );
+  });
+
+  it('opens the card with a pasted key on Save securely, for an Admin, the key out of the box', async () => {
+    await render({ keyForm: true });
+    await type(`use this ${KEY}`);
+    await act(async () => action('composer.saveKey')!.click());
+    expect(box().value).toBe('use this');
+    expect((action('addKey.key') as HTMLInputElement).value).toBe(KEY);
+    expect(handlers.onSend).not.toHaveBeenCalled();
+  });
+
+  it('shows no Save securely to a Manager, and sends a key question as ever without the forms', async () => {
+    await render({ keyForm: true }, 'manager');
+    await type(`key ${KEY}`);
+    expect(action('composer.saveKey')).toBeNull();
+
+    await render();
+    await type('use my OpenAI key');
+    await press('Enter');
+    expect(handlers.onSend).toHaveBeenCalledWith('use my OpenAI key', expect.anything());
   });
 });

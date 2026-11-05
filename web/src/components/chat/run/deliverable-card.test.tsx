@@ -42,6 +42,17 @@ vi.mock('@/components/providers/upgrade-gate', () => ({
   }),
 }));
 
+// The Send dialog loads on the click (version-send.tsx): here, what it was opened for.
+vi.mock('./version-send', () => ({
+  VersionSendDialog: ({ draftId, onClose }: { draftId: string; onClose: () => void }) => (
+    <div data-slot="version-send" data-draft={draftId}>
+      <button type="button" data-action="test.closeSend" onClick={onClose}>
+        Close
+      </button>
+    </div>
+  ),
+}));
+
 const { DeliverableCard, filedNumbers } = await import('./deliverable-card');
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -317,5 +328,206 @@ describe('DeliverableCard and its task (CHAT-09 items 12–16)', () => {
     await render(page, { canChange: true });
     expect(container.querySelector('[data-slot="deliverable-task"]')).toBeNull();
     expect(action('deliverable.attachAndMarkDone')).toBeNull();
+  });
+});
+
+describe('DeliverableCard for a set of images (W4-08, CHAT-15 items 21–22)', () => {
+  const images: ChatDeliverable = {
+    title: 'Cover image · GEO strategies',
+    type: 'image',
+    formats: ['jpg'],
+    status: 'draft',
+    filed: 'in_files',
+  };
+  const base = `/api/chat/runs/${RUN}/files/2/images`;
+  let picked: number[];
+
+  function serve(set: { count: number; selected: number; mine: boolean } | null, pickOk = true) {
+    picked = [];
+    fetchMock.mockImplementation((async (url: string, init?: RequestInit) => {
+      if (url === base && init?.method === 'POST') {
+        picked.push(JSON.parse(String(init.body)).image);
+        return new Response(JSON.stringify({ ok: pickOk }), { status: pickOk ? 200 : 500 });
+      }
+      if (url === base) {
+        return set
+          ? new Response(JSON.stringify({ ok: true, ...set }), { status: 200 })
+          : new Response(JSON.stringify({ ok: false }), { status: 404 });
+      }
+      return new Response(new Uint8Array([1, 2]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/jpeg' },
+      });
+    }) as never);
+  }
+  const shown = () =>
+    [...container.querySelectorAll('[data-slot="image-set"] [data-image]')].map((el) => ({
+      image: el.getAttribute('data-image'),
+      selected: el.getAttribute('data-selected') === 'true',
+      src: el.querySelector('img')?.getAttribute('src'),
+    }));
+  const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+
+  afterEach(() => fetchMock.mockReset());
+
+  it('shows every image, the selected one marked, and PNG in place of Copy and Download', async () => {
+    serve({ count: 4, selected: 1, mine: true });
+    await render(images);
+    await settle();
+    expect(container.textContent).toContain('Cover image · GEO strategies');
+    expect(container.textContent).toContain('Image · In Files');
+    expect(shown()).toEqual(
+      [1, 2, 3, 4].map((n) => ({ image: String(n), selected: n === 1, src: `${base}/${n}` })),
+    );
+    expect(action('deliverable.copy')).toBeNull();
+    expect(action('deliverable.download')).toBeNull();
+    expect(action('deliverable.png')).not.toBeNull();
+  });
+
+  it('picks another image in the person’s own chat, and puts it back when that fails', async () => {
+    serve({ count: 4, selected: 1, mine: true });
+    await render(images);
+    await settle();
+    await click(container.querySelector('[data-image="3"]')!);
+    expect(picked).toEqual([3]);
+    expect(shown().find((s) => s.selected)?.image).toBe('3');
+
+    serve({ count: 4, selected: 3, mine: true }, false);
+    await click(container.querySelector('[data-image="2"]')!);
+    expect(picked).toEqual([2]);
+    expect(shown().find((s) => s.selected)?.image).toBe('3');
+    expect(toast.error).toHaveBeenCalledWith("Couldn't pick that image. Try again.");
+  });
+
+  it('lets a teammate of a shared chat look, never pick', async () => {
+    serve({ count: 2, selected: 2, mine: false });
+    await render(images);
+    await settle();
+    const first = container.querySelector('[data-image="1"]') as HTMLButtonElement;
+    expect(first.disabled).toBe(true);
+    await click(first);
+    expect(picked).toEqual([]);
+  });
+
+  it('downloads the selected image, named after the set', async () => {
+    serve({ count: 4, selected: 2, mine: true });
+    await render(images);
+    await settle();
+    await click(action('deliverable.png')!);
+    expect(fetchMock).toHaveBeenCalledWith(`${base}/2`);
+    // jsdom draws no canvas: the image is saved as it came. (Node's own Blob on Node 20, not
+    // jsdom's: read by its fields, not its class.)
+    const [saved, name] = download.saveBlob.mock.calls[0] as [Blob, string];
+    expect(name).toBe('cover-image-geo-strategies.jpg');
+    expect(saved.size).toBe(2);
+    expect(toast).toHaveBeenCalledWith('Downloaded cover-image-geo-strategies.jpg');
+  });
+
+  it('says the images are in Files when it can’t show them', async () => {
+    serve(null);
+    await render(images);
+    await settle();
+    expect(container.textContent).toContain("Couldn't show the images. They are in Files.");
+  });
+});
+
+describe('DeliverableCard for a page’s version (CHAT-25 §6, W4-12a)', () => {
+  const version = (n: number, extra: Partial<NonNullable<ChatDeliverable['version']>> = {}) => ({
+    n,
+    counts: { questions: 3, sections: 3, characters: 1250 },
+    changes: {
+      shortened: [{ heading: 'Can I change plans?', before: 212, after: 27 }],
+      added: ['Can I get a refund?'],
+      placeholders: ['[REFUND PERIOD]'],
+    },
+    sections: [
+      { heading: 'Which AI platforms does it track?', text: 'Starter: ChatGPT and Copilot.' },
+      { heading: 'Can I change plans?', text: 'Yes, any time from Billing.' },
+      { heading: 'Can I get a refund?', text: 'Yes, within [REFUND PERIOD].' },
+    ],
+    ...extra,
+  });
+  const versionCard = (n = 2, extra = {}): ChatDeliverable => ({
+    ...page,
+    version: version(n, n > 1 ? { canUndo: true, ...extra } : extra),
+  });
+
+  it('says its version and what changed, and previews its first questions', async () => {
+    await render(versionCard());
+    expect(container.textContent).toContain('Version 2 · 3 questions · 1,250 characters');
+    expect(container.textContent).not.toContain('Document · In Files');
+    const changes = container.querySelector('[data-slot="version-changes"]')!.textContent;
+    expect(changes).toContain('“Can I change plans?” shortened: 212 → 27 characters');
+    expect(changes).toContain('New question: “Can I get a refund?”');
+    expect(changes).toContain('1 placeholder to fill: [REFUND PERIOD]');
+    const preview = () => container.querySelectorAll('[data-slot="version-preview"] dt');
+    expect(preview()).toHaveLength(2);
+    await click(action('version.showAll')!);
+    expect(preview()).toHaveLength(3);
+    expect(action('version.showAll')!.textContent).toBe('Show less');
+    expect(container.textContent).toContain('Saved to the Library as a draft after each change');
+  });
+
+  it('shows a first version’s placeholders only, with nothing to undo', async () => {
+    await render(versionCard(1));
+    expect(container.textContent).toContain('Version 1 · 3 questions');
+    const changes = container.querySelector('[data-slot="version-changes"]')!.textContent;
+    expect(changes).toContain('[REFUND PERIOD]');
+    expect(changes).not.toContain('shortened');
+    expect(action('version.undo')).toBeNull();
+  });
+
+  it('puts the version before back, by the run’s n-th file', async () => {
+    fetchMock.mockImplementationOnce(async () => Response.json({ ok: true }));
+    await render(versionCard());
+    await click(action('version.undo')!);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/chat/runs/${RUN}/files/2/undo`, {
+      method: 'POST',
+    });
+    expect(toast).toHaveBeenCalledWith('Version 1 is back in the draft.');
+    expect(action('version.undo')!.textContent).toBe('Back to version 1');
+    expect(action('version.undo')!.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('says when it couldn’t, and opens the plan dialog in a read-only workspace', async () => {
+    fetchMock.mockImplementationOnce(async () => new Response(null, { status: 404 }));
+    await render(versionCard());
+    await click(action('version.undo')!);
+    expect(toast.error).toHaveBeenCalledWith(
+      'The version before couldn’t be put back. Try again from the editor’s History.',
+    );
+    plan.locked = true;
+    fetchMock.mockClear();
+    await render(versionCard(3));
+    await click(action('version.undo')!);
+    expect(plan.openUpgrade).toHaveBeenCalledWith(messages.readOnly.actions.restoreVersion);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sends the page to the CMS from its card, for an Admin or a Manager in their chat (W4-12b)', async () => {
+    const DRAFT_ID = '55555555-5555-4555-8555-555555555555';
+    const card = { ...versionCard(), href: `/dashboard/content/editor/${DRAFT_ID}` as const };
+    await render(card);
+    expect(action('version.sendToCms')).toBeNull();
+    await render(card, { canChange: true });
+    await click(action('version.sendToCms')!);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(container.querySelector('[data-slot="version-send"]')?.getAttribute('data-draft')).toBe(
+      DRAFT_ID,
+    );
+    expect(action('version.sendToCms')!.hasAttribute('disabled')).toBe(true);
+    await click(action('test.closeSend')!);
+    expect(container.querySelector('[data-slot="version-send"]')).toBeNull();
+    // A read-only workspace: the plan dialog, no Send dialog.
+    plan.locked = true;
+    await click(action('version.sendToCms')!);
+    expect(plan.openUpgrade).toHaveBeenCalledWith(messages.readOnly.actions.sendToCms);
+    expect(container.querySelector('[data-slot="version-send"]')).toBeNull();
+  });
+
+  it('keeps saying it wasn’t saved to Files, with no Undo, when storage is full', async () => {
+    await render({ ...versionCard(), filed: 'storage_full' });
+    expect(container.textContent).toContain('Document · Not saved to Files · Storage is full');
+    expect(action('version.undo')).toBeNull();
   });
 });

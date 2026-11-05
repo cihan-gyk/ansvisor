@@ -58974,6 +58974,55 @@ comment on column public.content_draft_deliveries.taken_down_by is
 notify pgrst, 'reload schema';
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00461_chat_notices_schedules.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+-- 00461: notices about scheduled jobs and follow-up checks
+-- ============================================================================
+-- CHAT-12 items 16, 26–27 and CHAT-20 §13 (Wave 3, W3-04a): three new kinds
+-- of chat_notices (00441), behind CHAT_AGENTIC. A job's creator gets them at
+-- the top of their Inbox's Needs you:
+--
+--   * schedule_failed: a run of their job failed after its retry ("{Job}
+--     didn't run: {reason}"), in plain words, never a raw error.
+--   * schedule_paused: their job turned itself off: the monthly AI limit,
+--     their role or brand access, its brand, its skill, or 3 failed runs.
+--   * followup_result: a follow-up check they (or a Full auto run for them)
+--     set has its result.
+--
+-- The payload names the job (its id, title and why), as the Inbox row says
+-- it; nothing else. A job that runs again, or is turned back on, closes its
+-- notices (resolved_at). A successful run needs no notice: the job's chat is
+-- its creator's, and its result is in their Inbox as an unread answer.
+--
+-- The list includes 00446's kinds (agent_went_live, agent_go_live_off):
+-- 00446 is applied before this one, and dropping its kinds here would refuse
+-- its notices.
+
+alter table public.chat_notices
+  drop constraint if exists chat_notices_kind_check;
+alter table public.chat_notices
+  add constraint chat_notices_kind_check check (
+    kind in (
+      'own_key_failed',
+      'own_key_limit_80',
+      'own_key_limit_100',
+      'agent_went_live',
+      'agent_go_live_off',
+      'schedule_failed',
+      'schedule_paused',
+      'followup_result'
+    )
+  );
+
+-- A job's open notices, which a run that goes on closes.
+create index if not exists chat_notices_schedule_idx
+  on public.chat_notices ((payload ->> 'scheduleId'))
+  where resolved_at is null and kind in ('schedule_failed', 'schedule_paused');
+
+notify pgrst, 'reload schema';
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- migrations/00462_chat_models_images.sql
 -- ─────────────────────────────────────────────────────────────────────────
 -- ============================================================================
@@ -59555,6 +59604,95 @@ create policy "chat_outbound_emails: schedule select"
 notify pgrst, 'reload schema';
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00468_profiles_time_zone.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+-- 00468: a person's own time zone (Settings › Account)
+-- ============================================================================
+-- profiles.time_zone: the IANA time zone the person picked in Settings ›
+-- Account; null is Automatic, their browser's. Theirs to set, on their own
+-- row ("profiles: own row update", 00001): 00228's guard keeps role and
+-- organization with the server and leaves this column to the person.
+--
+-- What reads it, in this order: the person's pick, else their browser's zone,
+-- else UTC (web lib/time-zone.ts effectiveTimeZone):
+--   * a Chat run's zone: the times it shows and a schedule card's zone, so a
+--     new scheduled job is made on it;
+--   * the morning a person's daily suggestions are sent in (server
+--     chat-suggestions).
+-- A scheduled job keeps the zone it was made with (chat_schedules.timezone,
+-- 00457): a change here moves no job.
+
+alter table public.profiles
+  add column if not exists time_zone text
+    constraint profiles_time_zone_format check (
+      time_zone is null
+      or (
+        char_length(time_zone) between 1 and 64
+        and time_zone ~ '^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$'
+      )
+    );
+
+comment on column public.profiles.time_zone is
+  'The IANA time zone the person picked (Settings › Account); null = Automatic, their browser''s. New Chat runs, schedule cards and daily suggestions use it; existing scheduled jobs keep their own.';
+
+-- The format check above can't ask the database's own list of zones; this
+-- does, so a name that only looks like a zone ("Europe/Nowhere") is refused.
+create or replace function public.check_profile_time_zone()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.time_zone is not null
+     and not exists (
+       select 1 from pg_catalog.pg_timezone_names z where z.name = new.time_zone
+     )
+  then
+    raise exception 'profile time zone is not one the database knows'
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_check_time_zone on public.profiles;
+create trigger profiles_check_time_zone
+  before insert or update of time_zone on public.profiles
+  for each row execute function public.check_profile_time_zone();
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00469_chat_model_providers.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+-- 00469: which model providers a workspace lets Chat use
+-- ============================================================================
+-- Chat Wave 4 (W4-34; owner decision 2026-11-02 evening: "a US company
+-- doing business globally"), behind CHAT_AGENTIC. An Admin turns a model
+-- provider (the company that makes the model: OpenAI, Google, DeepSeek…) on
+-- or off in Settings › Chat. A provider that is off has no model in the
+-- model menu, and the engine runs Auto in place of one of its models, for a
+-- person's chat, an agent and a scheduled run alike (checked on the
+-- server).
+--
+--   * chat_settings.model_providers: the Admin's choices, by provider, as
+--     {provider: true|false}. A provider not in it takes the default the
+--     web keeps (lib/chat/model-providers.ts): Anthropic on, and always on,
+--     since Auto runs on its models; OpenAI and Google on; DeepSeek off.
+--     A provider added later starts on its own default with no migration.
+--     Read as chat_settings is (00401); the server writes it, for an Admin.
+
+alter table public.chat_settings
+  add column if not exists model_providers jsonb not null default '{}'::jsonb check (
+    jsonb_typeof(model_providers) = 'object' and octet_length(model_providers::text) <= 2000
+  );
+
+comment on column public.chat_settings.model_providers is
+  'The model providers an Admin turned on or off for Chat (00469; W4-34), {provider: boolean}. Missing: the web''s default (Anthropic always on; OpenAI, Google on; DeepSeek off).';
+
+notify pgrst, 'reload schema';
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- migrations/00470_brand_integrations.sql
 -- ─────────────────────────────────────────────────────────────────────────
 -- ============================================================================
@@ -59900,6 +60038,198 @@ on conflict (brand_id, provider) do nothing;
 notify pgrst, 'reload schema';
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00471_brand_access_team.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+-- 00471: brand access — invite people to some brands, change who sees which
+-- ============================================================================
+-- BRAND-ACCESS PR 12 (the Team screen). 00388 stored the choice (a person's
+-- brand_scope and the brands shared with them, member_brands, and an
+-- invitation's brand_scope and brand_ids); the rules that apply it came
+-- with 00389 to 00470. These two functions are how the server writes the
+-- choice, each in one transaction, so a person is never left between two
+-- states (joined but still All brands, or Selected brands with none of the
+-- brands meant for them):
+--
+--   * accept_invitation(invitation, person): joins the person to the
+--     invitation's organization with its role and brand access, shares the
+--     invitation's brands that still exist (a brand deleted since is
+--     skipped; the demo brand is everyone's already), and marks the
+--     invitation accepted. A Selected-brands invitation never turns into
+--     All brands: the scope is written, not left to the default.
+--   * set_member_brand_access(organization, person, scope, brands, by): an
+--     admin's Edit brands. All brands drops the person's shared brands;
+--     Selected brands keeps exactly the brands named, of the organization
+--     (the demo brand needs none). An admin always has All brands, and
+--     Selected brands needs at least one brand.
+--
+-- The server (service role) calls them after its own checks: the invitation
+-- is pending, unexpired and for the signed-in person's e-mail; the caller is
+-- an admin of the organization. Security invoker, for the service role
+-- only: the service role bypasses RLS, so the 00228/00374/00388 profile
+-- guard lets it change the role, organization and brand_scope, and the
+-- triggers that follow (00388: the reset on a new admin, dropping the old
+-- organization's brands) run as before.
+
+-- ── accept_invitation ───────────────────────────────────────────────────────
+
+create or replace function public.accept_invitation(
+  p_invitation_id uuid,
+  p_user_id uuid
+)
+returns jsonb
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_invitation public.invitations%rowtype;
+  v_brand_ids uuid[];
+begin
+  select * into v_invitation
+  from public.invitations i
+  where i.id = p_invitation_id
+  for update;
+
+  if not found then
+    raise exception 'invitation not found' using errcode = 'P0002';
+  end if;
+  if v_invitation.status <> 'pending' or v_invitation.expires_at < now() then
+    raise exception 'invitation is no longer valid' using errcode = '22023';
+  end if;
+
+  update public.profiles
+  set organization_id = v_invitation.organization_id,
+      role = v_invitation.role,
+      brand_scope = v_invitation.brand_scope,
+      onboarding_completed = true
+  where id = p_user_id;
+
+  if not found then
+    raise exception 'profile not found' using errcode = 'P0002';
+  end if;
+
+  -- The brands named that are still the organization's (not the demo brand,
+  -- which everyone sees). Inserted after the profile moved, so the
+  -- member_brands check finds the person in the organization.
+  if v_invitation.brand_scope = 'selected' then
+    insert into public.member_brands (organization_id, user_id, brand_id, granted_by)
+    select v_invitation.organization_id, p_user_id, b.id, v_invitation.invited_by
+    from public.brands b
+    where b.id = any (v_invitation.brand_ids)
+      and b.organization_id = v_invitation.organization_id
+      and not b.is_demo
+    on conflict (user_id, brand_id) do nothing;
+  end if;
+
+  update public.invitations
+  set status = 'accepted',
+      accepted_at = now()
+  where id = p_invitation_id;
+
+  select coalesce(array_agg(mb.brand_id order by mb.brand_id), '{}')
+  into v_brand_ids
+  from public.member_brands mb
+  where mb.user_id = p_user_id;
+
+  return jsonb_build_object(
+    'organization_id', v_invitation.organization_id,
+    'role', v_invitation.role,
+    'brand_scope', v_invitation.brand_scope,
+    'brand_ids', to_jsonb(v_brand_ids)
+  );
+end;
+$$;
+
+revoke all on function public.accept_invitation(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.accept_invitation(uuid, uuid) to service_role;
+
+comment on function public.accept_invitation(uuid, uuid) is
+  'Brand access (00471): joins the person to a pending, unexpired invitation''s organization with its role and brand access, shares the invitation''s brands that still exist (not the demo brand), and marks it accepted, in one transaction. Server only (service role), after it checked the invitation''s e-mail.';
+
+-- ── set_member_brand_access ─────────────────────────────────────────────────
+
+create or replace function public.set_member_brand_access(
+  p_organization_id uuid,
+  p_user_id uuid,
+  p_brand_scope text,
+  p_brand_ids uuid[],
+  p_granted_by uuid
+)
+returns uuid[]
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_role public.user_role;
+  v_brand_ids uuid[];
+begin
+  if p_brand_scope is null or p_brand_scope not in ('all', 'selected') then
+    raise exception 'brand scope must be all or selected' using errcode = '22023';
+  end if;
+
+  -- The person, locked: a move to another organization at the same time
+  -- waits, then finds the grants gone with it (00388's trigger).
+  select p.role into v_role
+  from public.profiles p
+  where p.id = p_user_id
+    and p.organization_id = p_organization_id
+  for update;
+
+  if not found then
+    raise exception 'member not found in this organization' using errcode = 'P0002';
+  end if;
+  if v_role = 'admin' and p_brand_scope = 'selected' then
+    raise exception 'admins always have all brands' using errcode = '22023';
+  end if;
+
+  if p_brand_scope = 'selected' then
+    select coalesce(array_agg(b.id order by b.id), '{}')
+    into v_brand_ids
+    from public.brands b
+    where b.id = any (coalesce(p_brand_ids, '{}'))
+      and b.organization_id = p_organization_id
+      and not b.is_demo;
+    if cardinality(v_brand_ids) = 0 then
+      raise exception 'selected brands needs at least one brand of the organization'
+        using errcode = '22023';
+    end if;
+  end if;
+
+  update public.profiles
+  set brand_scope = p_brand_scope
+  where id = p_user_id;
+
+  if p_brand_scope = 'all' then
+    delete from public.member_brands mb where mb.user_id = p_user_id;
+    return '{}';
+  end if;
+
+  delete from public.member_brands mb
+  where mb.user_id = p_user_id
+    and not (mb.brand_id = any (v_brand_ids));
+
+  insert into public.member_brands (organization_id, user_id, brand_id, granted_by)
+  select p_organization_id, p_user_id, ids.brand_id, p_granted_by
+  from unnest(v_brand_ids) as ids(brand_id)
+  on conflict (user_id, brand_id) do nothing;
+
+  return v_brand_ids;
+end;
+$$;
+
+revoke all on function public.set_member_brand_access(uuid, uuid, text, uuid[], uuid)
+  from public, anon, authenticated;
+grant execute on function public.set_member_brand_access(uuid, uuid, text, uuid[], uuid)
+  to service_role;
+
+comment on function public.set_member_brand_access(uuid, uuid, text, uuid[], uuid) is
+  'Brand access (00471): an admin''s Edit brands. All brands drops the person''s shared brands; Selected brands keeps exactly the organization''s brands named (at least one; not the demo brand). Admins are always All brands. One transaction, the person''s profile locked. Server only (service role), after it checked the caller is an admin.';
+
+notify pgrst, 'reload schema';
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- migrations/00472_report_cards.sql
 -- ─────────────────────────────────────────────────────────────────────────
 -- ============================================================================
@@ -60073,4 +60403,213 @@ drop trigger if exists brands_guard_google_properties on public.brands;
 create trigger brands_guard_google_properties
   before insert or update on public.brands
   for each row execute function public.guard_brand_google_properties();
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00474_chat_notices_agent_needs_you.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+-- 00474: a notice when an agent's run waits for its person
+-- ============================================================================
+-- "Notify me when an agent needs me" (Settings › Chat, chat_user_prefs.
+-- notify_via, 00408), behind CHAT_AGENTIC. When an agent's run stops to ask
+-- its person something or to wait for their OK on a change (its status
+-- needs_you), the person the run acts as gets, with "Inbox + email", one
+-- e-mail: once per run. A chat_notices row (dedupe_key agent_needs_you:{run
+-- id}) records it, so a run that waits again sends none; the Inbox already
+-- lists the run's chat under Needs you, so the row isn't shown a second
+-- time. When the run goes on or ends, the row closes (resolved_at). The
+-- server writes, as for 00441's and 00446's kinds (server
+-- lib/chat-notices/needs-you.js).
+--
+-- The kind list keeps every kind written before: 00441's, 00446's, and
+-- 00461's (W3-04a: schedule_failed, schedule_paused, followup_result), which
+-- an open pull request adds. Whichever migration rewrites this check last
+-- must list every kind, or the others' notices are refused.
+
+alter table public.chat_notices
+  drop constraint if exists chat_notices_kind_check;
+alter table public.chat_notices
+  add constraint chat_notices_kind_check check (
+    kind in (
+      'own_key_failed',
+      'own_key_limit_80',
+      'own_key_limit_100',
+      'agent_went_live',
+      'agent_go_live_off',
+      'schedule_failed',
+      'schedule_paused',
+      'followup_result',
+      'agent_needs_you'
+    )
+  );
+
+notify pgrst, 'reload schema';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00475_chat_agents_demo_brand.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+-- 00475: the demo brand's sample agents
+-- ============================================================================
+-- An agent belongs to the workspace, not to a brand (00419), so the demo
+-- brand's sample agents (demo Agent Center: the server's lib/demo/agents.js)
+-- carry the demo brand they show. The web leaves them out of whatever runs,
+-- counts or pauses agents (the triggers, the sweep, the plan's active
+-- agents), and no change of a person reaches them (agentForAct refuses
+-- demo_brand). They go with the demo brand (on delete cascade) and when it
+-- is hidden, and a rebuild finds them by it. Null for every agent a person
+-- makes.
+--
+-- The column only ever names a demo brand of the agent's own workspace
+-- (the trigger below), so a real agent can never be marked by mistake and
+-- left out of its own workspace's runs.
+
+alter table public.chat_agents
+  add column if not exists demo_brand_id uuid references public.brands(id) on delete cascade;
+
+comment on column public.chat_agents.demo_brand_id is
+  'The demo brand whose sample agent this is (demo Agent Center); null for an agent a person made. Such an agent never runs, counts toward the plan or pauses.';
+
+create index if not exists chat_agents_demo_brand_idx
+  on public.chat_agents (demo_brand_id)
+  where demo_brand_id is not null;
+
+create or replace function public.check_chat_agent_demo_brand()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.demo_brand_id is null then
+    return new;
+  end if;
+  if not exists (
+    select 1
+    from public.brands b
+    where b.id = new.demo_brand_id
+      and b.organization_id = new.organization_id
+      and b.is_demo
+  ) then
+    raise exception 'an agent''s demo_brand_id must be a demo brand of its workspace'
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists chat_agents_check_demo_brand on public.chat_agents;
+create trigger chat_agents_check_demo_brand
+  before insert or update of demo_brand_id, organization_id on public.chat_agents
+  for each row execute function public.check_chat_agent_demo_brand();
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00476_chat_files_jpeg.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+-- 00476: Files takes JPEG images
+-- ============================================================================
+-- Chat files the images it makes in the private bucket chat-files (CHAT-15
+-- item 24, W4-08). Google's image models (Nano Banana) answer in JPEG, which
+-- the bucket's list (00411: PNG and WebP only) turns away. This adds
+-- image/jpeg to it. Run again, it changes nothing; any type an admin added
+-- stays. The person still downloads PNG: the result card converts in the
+-- browser.
+
+update storage.buckets
+set allowed_mime_types = array_append(allowed_mime_types, 'image/jpeg')
+where id = 'chat-files'
+  and allowed_mime_types is not null
+  and not ('image/jpeg' = any (allowed_mime_types));
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00477_chat_files_jpg_format.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- ============================================================================
+-- 00477: a file in Files may download as JPEG
+-- ============================================================================
+-- A set of images Chat made (W4-08) is filed with its images' own format:
+-- JPEG from Google's image models (00476 lets the bucket take them). The
+-- formats check (00411) knew PNG and WebP only. The same list, with 'jpg'.
+-- Run again, it ends the same.
+
+alter table public.chat_files drop constraint if exists chat_files_formats_check;
+alter table public.chat_files add constraint chat_files_formats_check check (
+  formats <@ array[
+    'md', 'html', 'docx', 'pdf', 'csv', 'xlsx', 'json', 'jsonld', 'txt', 'png', 'jpg', 'webp'
+  ]::text[]
+  and public.chat_text_array_distinct(formats)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00478_report_card_email_attempts.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- A report card's e-mail the web couldn't draw a PDF for is tried again on
+-- the next sweep (server/src/lib/report-card/deliver.js): how many times it
+-- was tried, so it gives up after a cap and waits behind the e-mails not yet
+-- tried instead of filling every sweep.
+
+alter table public.report_card_requests
+  add column if not exists email_attempts integer not null default 0
+    check (email_attempts >= 0);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- migrations/00479_costly_writes_managers.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Deleting a Site Audit and approving or rejecting a brand fact are admins'
+-- and managers' (server/src/routes/audits.js, brand-facts.js, 2026-11-03).
+-- The routes check the role; these policies hold the same limit for a
+-- member's own session, so an analyst can't do either straight through the
+-- database. Changing an audit row is held the same way: the server writes
+-- audits with the service role, and no member's session updates one.
+
+drop policy if exists site_audits_member_update on public.site_audits;
+create policy site_audits_member_update on public.site_audits
+  for update
+  using (
+    brand_id in (
+      select b.id from public.brands b
+      join public.profiles p on p.organization_id = b.organization_id
+      where p.id = auth.uid() and p.role in ('admin', 'manager')
+    )
+  )
+  with check (
+    brand_id in (
+      select b.id from public.brands b
+      join public.profiles p on p.organization_id = b.organization_id
+      where p.id = auth.uid() and p.role in ('admin', 'manager')
+    )
+  );
+
+drop policy if exists site_audits_member_delete on public.site_audits;
+create policy site_audits_member_delete on public.site_audits
+  for delete
+  using (
+    brand_id in (
+      select b.id from public.brands b
+      join public.profiles p on p.organization_id = b.organization_id
+      where p.id = auth.uid() and p.role in ('admin', 'manager')
+    )
+  );
+
+drop policy if exists "brand_facts: member update" on public.brand_facts;
+create policy "brand_facts: member update"
+  on public.brand_facts
+  for update
+  using (
+    brand_id in (
+      select b.id from public.brands b
+      join public.profiles p on p.organization_id = b.organization_id
+      where p.id = auth.uid() and p.role in ('admin', 'manager')
+    )
+  )
+  with check (
+    brand_id in (
+      select b.id from public.brands b
+      join public.profiles p on p.organization_id = b.organization_id
+      where p.id = auth.uid() and p.role in ('admin', 'manager')
+    )
+    and reviewed_by = auth.uid()
+    and status in ('approved', 'rejected')
+    and reviewed_at between now() - interval '1 minute' and now() + interval '1 minute'
+  );
 

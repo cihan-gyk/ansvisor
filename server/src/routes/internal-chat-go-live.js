@@ -10,7 +10,10 @@
  *   The engine reserved the step's slot first (reserve_agent_go_live, 00443).
  *   Everything is checked again here, from the database, so a fault in the
  *   web's precedence alone can't put anything live:
- *     - Chat is on for the workspace, its plan allows Full auto (Growth and
+ *     - Chat is on for the workspace, and so is going live on its own
+ *       (CHAT_AUTO_GO_LIVE and CHAT_AUTO_GO_LIVE_ORGS, staff's rollout list
+ *       and kill switch: lib/chat-flag.js autoGoLiveEnabled), whatever the
+ *       workspace's own switch says; its plan allows Full auto (Growth and
  *       up, paid, active), and Admins turned publishing on its own on
  *       (chat_settings.auto_go_live_groups);
  *     - the agent run is the workspace's, running, and acts as actingUserId;
@@ -20,20 +23,27 @@
  *       the brand isn't the demo's;
  *     - the reservation is this step's: reserved for this run, draft and
  *       target, or done for them in the last 24 hours (a send again takes
- *       no second slot). A page taken down doesn't go out again on its own.
+ *       no second slot; never for a webhook, whose send is no update:
+ *       409 already_sent). A page taken down doesn't go out again on its own.
  *   Then the page goes as a person's Send to CMS does (sendContentPages),
  *   with the agent run kept on the delivery (00444), and the step is
  *   finished: done, or failed with why, which frees its slot. Never retried.
  *   Done, the agent's owner and Notify people are told (Inbox and e-mail,
  *   lib/chat-notices/go-live.js, 00446), after the answer is on its way.
  *   → 200 { delivery }: the send's row as the Send dialog reads it.
- *   → 403 { code }: a check failed (chat_off, plan, switch_off, permission,
- *     role, publishing_off, brand, demo_brand, reservation); nothing sent.
+ *   → 403 { code }: a check failed (chat_off, auto_go_live_off, plan,
+ *     switch_off, permission, role, publishing_off, brand, demo_brand,
+ *     reservation); nothing sent. auto_go_live_off is logged: the web asked
+ *     while this server's switch is off for the workspace.
  *   → 404 { code: 'not_found' }: the run or the draft isn't there.
  *   → 409, 422, 429, 502 { code }: the send's own refusal (sendContentPages).
  *   `kind: 'publish'` (PR 9) puts a new page live in Webflow, WordPress or
  *   Wix (lib/cms-publish.js): live already → 409 live_item, Framer → 409
  *   framer_site_publish, a publish the CMS refused → 502 publish_refused.
+ *   `kind: 'webhook'` (PR 11, target `webhook`) sends the page to the
+ *   brand's saved webhook as the editor's Send does (no address comes with
+ *   it): no webhook → 409 no_webhook, one without the event → 409
+ *   webhook_not_subscribed. What happens next is the workspace's workflow's.
  *
  * POST /api/internal/chat/go-live/quality-reads
  *   { orgId, agentRunId, runId, actingUserId, draftId, sites }
@@ -50,8 +60,10 @@
  *   { links, claims, page, classes, facts, siteTrust }, each
  *   { ok: true, value } or { ok: false, code } (run_cap, ai_budget, off,
  *   failed); the gate holds the page on any it needs that failed.
- *   → 403 { code } for the run checks (chat_off, permission, role, brand,
- *     demo_brand); 404 for a run or draft that isn't the workspace's.
+ *   → 403 { code } for the run checks (chat_off, auto_go_live_off,
+ *     permission, role, brand, demo_brand); 404 for a run or draft that
+ *     isn't the workspace's. Nothing is read, and nothing spent, while going
+ *     live on its own is off for the workspace.
  */
 
 import { Router } from 'express';
@@ -60,7 +72,7 @@ import { z } from 'zod';
 import supabaseAdmin from '../config/supabase.js';
 import { isCloud } from '../config/plans.js';
 import { brandAccessOf } from '../lib/access.js';
-import { chatAgenticEnabled } from '../lib/chat-flag.js';
+import { autoGoLiveEnabled, chatAgenticEnabled } from '../lib/chat-flag.js';
 import { DeliveryError, deliveryPage, sendContentPages } from '../lib/content-delivery.js';
 import { publishContentPage } from '../lib/cms-publish.js';
 import { isDemoBrand } from '../middleware/demo-brand.js';
@@ -95,17 +107,20 @@ const GROUP = 'publishing';
 /** How far back a step done for the same draft and target lets it go again with no new slot. */
 const SLOT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-const sendSchema = z.strictObject({
-  orgId: z.guid(),
-  agentRunId: z.guid(),
-  runId: z.guid(),
-  actingUserId: z.guid(),
-  draftId: z.guid(),
-  target: z.enum(['webflow', 'wordpress', 'framer', 'wix']),
-  kind: z.enum(['cms_draft', 'publish']),
-  reservationId: z.guid(),
-  page: deliveryPage,
-});
+const sendSchema = z
+  .strictObject({
+    orgId: z.guid(),
+    agentRunId: z.guid(),
+    runId: z.guid(),
+    actingUserId: z.guid(),
+    draftId: z.guid(),
+    target: z.enum(['webflow', 'wordpress', 'framer', 'wix', 'webhook']),
+    kind: z.enum(['cms_draft', 'publish', 'webhook']),
+    reservationId: z.guid(),
+    page: deliveryPage,
+  })
+  // The brand's webhook is a send of its own (PR 11): never a CMS draft or a publish.
+  .refine((body) => (body.kind === 'webhook') === (body.target === 'webhook'));
 
 /**
  * A check that failed: nothing is sent. `free`: the slot was reserved for
@@ -118,6 +133,27 @@ class Refused extends Error {
     this.status = status;
     this.free = free;
   }
+}
+
+/** Staff's switch (CHAT_AUTO_GO_LIVE) is off for the workspace: no step goes, whatever its own switch says. */
+const AUTO_GO_LIVE_OFF = 'auto_go_live_off';
+
+/**
+ * The web asked for a step while this server's switch is off for the
+ * workspace: the two sides' CHAT_AUTO_GO_LIVE differ, or the secret is used
+ * by something else. Logged, so it is seen.
+ */
+function logSwitchOff(req, err, body) {
+  if (err.code !== AUTO_GO_LIVE_OFF) return;
+  req.log.warn(
+    {
+      orgId: body.orgId,
+      agentRunId: body.agentRunId,
+      draftId: body.draftId,
+      path: req.originalUrl,
+    },
+    'internal go-live refused: CHAT_AUTO_GO_LIVE is off for the workspace',
+  );
 }
 
 /** Full auto's plan rule, as the web's plan facts have it: Growth and up, paid, active. */
@@ -157,6 +193,7 @@ async function checkStep(body) {
   const refuse = (code, status = 403) => new Refused(code, { status, free });
 
   if (!chatAgenticEnabled(body.orgId)) throw refuse('chat_off');
+  if (!autoGoLiveEnabled(body.orgId)) throw refuse(AUTO_GO_LIVE_OFF);
   const [org, settings, run, access, draft] = await Promise.all([
     one(
       supabaseAdmin.from('organizations').select('plan, subscription_status').eq('id', body.orgId),
@@ -209,6 +246,9 @@ async function checkStep(body) {
   // A page someone took down never goes live on its own again (PR 10): a click does it.
   if (await takenDown(body.draftId)) throw refuse('taken_down', 409);
   if (!reservationFits(step, body, run.agent_id)) throw refuse('reservation');
+  // A webhook POST isn't an update of one item, as a CMS draft is: each send is a new package
+  // the workflow may post again. A webhook step done already is never sent twice on its own.
+  if (body.kind === 'webhook' && step.status === 'done') throw refuse('already_sent', 409);
   return draft.brand_id;
 }
 
@@ -237,7 +277,8 @@ function reservationFits(step, body, agentId) {
   if (step.status === 'reserved') {
     return step.agent_run_id === body.agentRunId && step.kind === body.kind;
   }
-  // A send again within the window takes no second slot; one taken down never goes on its own.
+  // A send again within the window takes no second slot (a webhook's is refused after it);
+  // one taken down never goes on its own.
   return step.status === 'done' && Date.now() - Date.parse(step.created_at) < SLOT_WINDOW_MS;
 }
 
@@ -272,6 +313,7 @@ router.post('/send', async (req, res) => {
     brandId = await checkStep(body);
   } catch (err) {
     if (err instanceof Refused) {
+      logSwitchOff(req, err, body);
       // Nothing went: this step's own slot is freed for another.
       if (err.free) {
         await finishStep(body.reservationId, 'failed', { error: `refused: ${err.code}` }).catch(
@@ -292,7 +334,8 @@ router.post('/send', async (req, res) => {
       target: body.target,
       agentRunId: body.agentRunId,
     };
-    // A CMS draft is a send; a publish writes the checked page into it, then puts it live.
+    // A CMS draft or a webhook send is a send; a publish writes the checked page into its
+    // CMS draft, then puts it live.
     const delivery =
       body.kind === 'publish'
         ? (await publishContentPage({ ...step, page: body.page })).delivery
@@ -337,6 +380,7 @@ const readsSchema = z.strictObject({
 /** The run a gate reads for: running, as this person, in the workspace; the draft, theirs to read. */
 async function checkReads(body) {
   if (!chatAgenticEnabled(body.orgId)) throw new Refused('chat_off');
+  if (!autoGoLiveEnabled(body.orgId)) throw new Refused(AUTO_GO_LIVE_OFF);
   const [run, access, draft] = await Promise.all([
     one(
       supabaseAdmin
@@ -398,8 +442,10 @@ router.post('/quality-reads', async (req, res) => {
   try {
     draft = await checkReads(body);
   } catch (err) {
-    if (err instanceof Refused)
+    if (err instanceof Refused) {
+      logSwitchOff(req, err, body);
       return res.status(err.status).json({ success: false, code: err.code });
+    }
     req.log.error({ err }, 'internal go-live reads check error');
     return res.status(500).json({ success: false, code: 'failed', message: 'Internal error' });
   }

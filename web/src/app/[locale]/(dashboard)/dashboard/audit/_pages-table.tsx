@@ -27,6 +27,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { pct, scoreColor } from '@/components/audit/audit-report';
+import { ScoreRangeMark } from '@/components/audit/score-range';
+import { scoreRange } from '@/lib/audit/score-range';
 import { signedValue, TONE_TEXT } from '../insights/kpi-format';
 import type { AuditedPage, AuditedPageStatus, AuditRun, AuditTemplate } from '@/lib/actions/audits';
 import { formatDate, formatDateTime, formatNumber } from '@/lib/format';
@@ -139,7 +141,15 @@ function SinceFirst({ page }: { page: AuditedPage }) {
   );
 }
 
-function HistoryRun({ run, onDelete }: { run: AuditRun; onDelete: (id: string) => void }) {
+/** The current score's range ("± 2") from the page's own latest audits, once it has enough. */
+function PageScoreRange({ page }: { page: AuditedPage }) {
+  const range = page.score === null ? null : scoreRange(page.trend);
+  if (!range) return null;
+  return <ScoreRangeMark range={range} className="ml-1 text-xs" />;
+}
+
+/** An earlier audit of the page; Delete only with `onDelete` (admins and managers, 2026-11-03). */
+function HistoryRun({ run, onDelete }: { run: AuditRun; onDelete?: (id: string) => void }) {
   const t = useTranslations('audit');
   // A read-only workspace (plan not active): the upgrade dialog instead of the confirm.
   const { isLocked, openUpgrade } = useUpgradeGate();
@@ -158,38 +168,42 @@ function HistoryRun({ run, onDelete }: { run: AuditRun; onDelete: (id: string) =
       <Link href={`/dashboard/audit/${run.id}`} className="text-primary hover:underline">
         {t('pages.viewReport')}
       </Link>
-      <Dialog
-        onOpenChange={(open, details) => {
-          if (!open || !isLocked) return;
-          details.cancel();
-          openUpgrade(tActions('deleteAudits'));
-        }}
-      >
-        <DialogTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon"
-              className="ml-auto h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-              aria-label={t('deleteAudit')}
-            />
-          }
+      {onDelete && (
+        <Dialog
+          onOpenChange={(open, details) => {
+            if (!open || !isLocked) return;
+            details.cancel();
+            openUpgrade(tActions('deleteAudits'));
+          }}
         >
-          <Trash2 className="h-3.5 w-3.5" />
-        </DialogTrigger>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t('deleteAudit')}</DialogTitle>
-            <DialogDescription>{t('deleteConfirm')}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>{t('cancel')}</DialogClose>
-            <DialogClose render={<Button variant="destructive" onClick={() => onDelete(run.id)} />}>
-              {t('deleteAudit')}
-            </DialogClose>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          <DialogTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                className="ml-auto h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                aria-label={t('deleteAudit')}
+              />
+            }
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>{t('deleteAudit')}</DialogTitle>
+              <DialogDescription>{t('deleteConfirm')}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <DialogClose render={<Button variant="outline" />}>{t('cancel')}</DialogClose>
+              <DialogClose
+                render={<Button variant="destructive" onClick={() => onDelete(run.id)} />}
+              >
+                {t('deleteAudit')}
+              </DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </li>
   );
 }
@@ -218,7 +232,8 @@ export function AuditPagesTable({
   primaryHost: string | null;
   loadingMore: boolean;
   onLoadMore: () => void;
-  onDeleteRun: (id: string) => void;
+  /** Deleting an earlier audit: admins and managers only, else none. */
+  onDeleteRun?: (id: string) => void;
   /** Keys of the selected pages. */
   selected: Set<string>;
   onSelect: (keys: string[], on: boolean) => void;
@@ -368,6 +383,7 @@ export function AuditPagesTable({
                           className={cn('font-semibold tabular-nums', scoreColor(page.score))}
                         >
                           {pct(page.score) ?? '—'}
+                          <PageScoreRange page={page} />
                           <SinceFirst page={page} />
                         </TableCell>
                         <TableCell className="text-right tabular-nums">

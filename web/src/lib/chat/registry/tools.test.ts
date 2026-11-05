@@ -78,12 +78,21 @@ vi.mock('@/lib/mcp/brand-facts-reads', async (importOriginal) =>
 vi.mock('@/lib/mcp/whats-new', async (importOriginal) =>
   tracked.all('mcp/whats-new', await importOriginal<Record<string, unknown>>()),
 );
+// No app page makes images yet: the image rows call Chat's own image functions (W4-08).
+vi.mock('@/lib/chat/images/chat-images', () => ({
+  imageModelQuestion: tracked.track('chat/images.imageModelQuestion'),
+  makeChatImages: tracked.track('chat/images.makeChatImages'),
+  imageCostLine: tracked.track('chat/images.imageCostLine'),
+  imagePrecheck: tracked.track('chat/images.imagePrecheck'),
+}));
 vi.mock('@/lib/actions/content', () => ({
   updateOpportunityStatus: tracked.track('actions/content.updateOpportunityStatus'),
 }));
 vi.mock('@/lib/actions/content-drafts', () => ({
   createContentDraft: tracked.track('actions/content-drafts.createContentDraft'),
   updateContentDraft: tracked.track('actions/content-drafts.updateContentDraft'),
+  setContentDraftReady: tracked.track('actions/content-drafts.setContentDraftReady'),
+  suggestDraftChanges: tracked.track('actions/content-drafts.suggestDraftChanges'),
 }));
 vi.mock('@/lib/chat/actor/drafts', () => ({
   createContentDraftFor: tracked.track('chat/actor/drafts.createContentDraftFor'),
@@ -100,6 +109,7 @@ vi.mock('@/lib/chat/actor/action-center', () => ({
 vi.mock('@/lib/actions/cms-send', () => ({
   sendDraftToCms: tracked.track('actions/cms-send.sendDraftToCms'),
   publishDraftToCms: tracked.track('actions/cms-send.publishDraftToCms'),
+  sendDraftToWebhook: tracked.track('actions/cms-send.sendDraftToWebhook'),
 }));
 vi.mock('@/lib/actions/cms-take-down', () => ({
   takeDownDraft: tracked.track('actions/cms-take-down.takeDownDraft'),
@@ -116,6 +126,9 @@ vi.mock('@/lib/actions/prompt-suggestions', () => ({
 }));
 vi.mock('@/lib/actions/chat-schedules', () => ({
   createChatSchedule: tracked.track('actions/chat-schedules.createChatSchedule'),
+}));
+vi.mock('@/lib/actions/chat-agent-calls', () => ({
+  runAgentFromChat: tracked.track('actions/chat-agent-calls.runAgentFromChat'),
 }));
 vi.mock('@/lib/actions/chat-access-requests', () => ({
   requestAccess: tracked.track('actions/chat-access-requests.requestAccess'),
@@ -169,6 +182,8 @@ const SESSION_FREE = [
   'update_opportunity',
   'dismiss_prompt_suggestion',
   'create_action',
+  // An agent's Ready for review in Full auto (owner decision 2026-11-03).
+  'set_task_ready_for_review',
   'update_draft',
 ];
 /** A run's place, as runLoggedWrite gives a write. */
@@ -290,7 +305,11 @@ describe('the Chat tool registry', () => {
       const result = await tool.run(ctx, tool.inputSchema.parse(tool.fixture.input));
       expect(calls).toHaveLength(1);
       expect(result).toEqual({ from: calls[0].from });
-      if (tool.class === 'read') {
+      if (tool.area === 'images') {
+        // Chat's own image functions, with the member's context.
+        expect(calls[0].from).toMatch(/^chat\/images\./);
+        expect(calls[0].args[0]).toBe(ctx);
+      } else if (tool.class === 'read') {
         // The MCP data functions, scoped to the signed-in member's organization.
         expect(calls[0].from).toMatch(/^mcp\//);
         expect(calls[0].args[0]).toBe(ctx);
@@ -358,8 +377,11 @@ describe('the Chat tool registry', () => {
     await runInChat('attach_file_to_task', { brand_id: brand, task_id: item, file_id: item });
     await runInChat('set_task_ready_for_review', { brand_id: brand, task_id: item });
     await run('update_draft', { draft_id: item, body_html: '<h1>FAQ</h1>' });
+    await run('suggest_draft_changes', { draft_id: item, request: 'Make answer 3 shorter' });
+    await run('set_draft_ready', { draft_id: item });
     await run('push_cms_draft', { draft_id: item, destination: 'wordpress' });
     await run('publish_cms', { draft_id: item, destination: 'wix' });
+    await run('trigger_content_webhook', { draft_id: item });
     await run('build_report', {
       brand_id: brand,
       template: 'competitor_benchmark',
@@ -433,8 +455,11 @@ describe('the Chat tool registry', () => {
         'actions/content-drafts.updateContentDraft',
         [item, { title: undefined, bodyHtml: '<h1>FAQ</h1>' }],
       ],
+      ['actions/content-drafts.suggestDraftChanges', [item, 'Make answer 3 shorter']],
+      ['actions/content-drafts.setContentDraftReady', [item]],
       ['actions/cms-send.sendDraftToCms', [item, 'wordpress']],
       ['actions/cms-send.publishDraftToCms', [item, 'wix']],
+      ['actions/cms-send.sendDraftToWebhook', [item]],
       [
         'actions/reports.createReport',
         [brand, { dateFrom: '2026-10-01', dateTo: '2026-10-31', template: 'competitor_benchmark' }],
@@ -710,12 +735,17 @@ describe('approval policies', () => {
       set_task_ready_for_review: ['admin', 'manager'],
       // Content, reports and Site Audit (W2-07, DECISIONS T): an Analyst only saves drafts.
       update_draft: ['admin', 'manager'],
+      suggest_draft_changes: ['admin', 'manager'],
+      set_draft_ready: ['admin', 'manager'],
       push_cms_draft: ['admin', 'manager'],
       publish_cms: ['admin', 'manager'],
+      trigger_content_webhook: ['admin', 'manager'],
       // Take down (AUTONOMOUS-GO-LIVE PR 10): as the API's route, a Manager even while publishing is off.
       unpublish_cms: ['admin', 'manager'],
       build_report: ['admin', 'manager'],
       run_site_audit: ['admin', 'manager'],
+      // Images (CHAT-20 §9 row 70, W4-08): Admins and Managers, as a report.
+      generate_image: ['admin', 'manager'],
       // Scheduled work (CHAT-20 §4: Admins and Managers create schedules).
       create_schedule: ['admin', 'manager'],
       // A skill of one's own (W3-06, CHAT-13 v2): Admins and Managers save skills.
@@ -723,6 +753,8 @@ describe('approval policies', () => {
       // Memory (W3-11, CHAT-14 item 25): every role has its Me; the store checks the scope.
       save_memory: ['admin', 'manager', 'analyst', 'agency_partner'],
       forget_memory: ['admin', 'manager', 'analyst', 'agency_partner'],
+      // An agent running another agent (CHAT-27 phase 2): Admins and Managers, as agents are.
+      run_agent: ['admin', 'manager'],
     });
     for (const tool of CHAT_TOOLS.filter((t) => t.class === 'read')) {
       expect(allowedRoles(tool)).toEqual(['admin', 'manager', 'analyst', 'agency_partner']);
@@ -738,7 +770,7 @@ describe('approval policies', () => {
           '<h1>Pricing FAQ</h1><script>fetch("https://evil.example")</script><img src="https://ansvisor.com/a.png" onerror="alert(1)">',
       } as never,
       FIXTURE_IDS.brand,
-    )!;
+    ) as { body: string };
     expect(made.body).not.toMatch(/<script/i);
     expect(made.body).not.toMatch(/onerror/i);
     expect(made.body).toContain('<h1>Pricing FAQ</h1>');
@@ -912,9 +944,9 @@ describe('approval policies', () => {
     expect(() =>
       defineTool({ ...readRow, class: 'write', defaultPolicy: 'ask', maxPolicy: 'ask', goLive }),
     ).toThrow(/only an execute/);
-    // The registry: Send to CMS may, every other row may not.
+    // The registry: Send to CMS, Publish and the webhook send (PR 11) may, every other row may not.
     const onItsOwn = CHAT_TOOLS.filter((tool) => tool.flags.goLiveOnOwn).map((tool) => tool.name);
-    expect(onItsOwn).toEqual(['push_cms_draft', 'publish_cms']);
+    expect(onItsOwn).toEqual(['push_cms_draft', 'publish_cms', 'trigger_content_webhook']);
     // Take down (PR 10): an EXECUTE outside the go-live groups, which never goes live itself.
     expect(chatTool('unpublish_cms')).toMatchObject({ class: 'execute', executeGroup: null });
     expect(() => defineTool({ ...execute, executeGroup: null, goLive } as never)).toThrow(
@@ -929,6 +961,15 @@ describe('approval policies', () => {
       kind: 'cms_draft',
       draftId: 'd',
       target: 'wix',
+    });
+    // The webhook send takes the draft only: its target is the brand's saved webhook.
+    const webhook = chatTool('trigger_content_webhook')!;
+    expect(Object.keys(webhook.inputSchema.shape)).toEqual(['draft_id']);
+    expect(webhook).toMatchObject({ class: 'execute', executeGroup: 'publishing' });
+    expect(webhook.goLive?.({ draft_id: 'd' })).toEqual({
+      kind: 'webhook',
+      draftId: 'd',
+      target: 'webhook',
     });
   });
 
@@ -1048,7 +1089,7 @@ describe("the model's tool list on the registry's rows", () => {
     ).map((tool) => tool.name);
 
   const reads = CHAT_TOOLS.filter((tool) => tool.class === 'read').map((tool) => tool.name);
-  // The WRITEs and the EXECUTEs (push_cms_draft, publish_cms), in the registry's order.
+  // The WRITEs and the EXECUTEs (push_cms_draft, publish_cms, trigger_content_webhook), in the registry's order.
   const writes = CHAT_TOOLS.filter((tool) => tool.class !== 'read').map((tool) => tool.name);
   const starter = facts({ plan: 'starter', subscription_status: 'active' });
   const growth = facts({ plan: 'growth', subscription_status: 'active' });
@@ -1070,7 +1111,11 @@ describe("the model's tool list on the registry's rows", () => {
       'request_access',
       ...memory,
     ]);
-    expect(list('manager', starter)).toEqual([...withoutShopping, ...writes]);
+    // Running another agent is Growth and up (CHAT-27 decision 4).
+    expect(list('manager', starter)).toEqual([
+      ...withoutShopping,
+      ...writes.filter((name) => name !== 'run_agent'),
+    ]);
     expect(list('admin', growth)).toEqual([...reads, ...writes]);
     expect(list('analyst', facts(null, false))).toEqual([
       ...reads,
@@ -1096,5 +1141,80 @@ describe("the model's tool list on the registry's rows", () => {
       'save_memory',
       'forget_memory',
     ]);
+  });
+});
+
+describe("save_skill's draft card (W3-08)", () => {
+  const tool = () => chatTool('save_skill')!;
+  const ctx = {
+    timezone: 'UTC',
+    organizationId: 'org-1',
+    // W3-12a's card context carries who it is for too.
+    userId: 'user-1',
+    now: new Date('2026-11-02T10:00:00Z'),
+  };
+  const input = {
+    name: 'pricing-faq',
+    description: 'Writes a pricing FAQ in our tone.',
+    instructions: 'Read the pricing page. Answer each question in two sentences.',
+  };
+
+  it('is a card in every mode: nothing is kept before Save', () => {
+    expect(tool().flags.alwaysCard).toBe(true);
+    expect([tool().defaultPolicy, tool().maxPolicy]).toEqual(['ask', 'ask']);
+  });
+
+  it('shows the draft as editable fields, with Save skill and what it can’t change', async () => {
+    const form = await tool().form!.fields(input as never, ctx);
+    expect(form).toMatchObject({ kind: 'skill', submit: 'Save skill' });
+    expect(form.fields.map((f) => [f.name, f.kind, f.value])).toEqual([
+      ['name', 'text', 'pricing-faq'],
+      ['title', 'text', 'pricing faq'],
+      ['description', 'textarea', 'Writes a pricing FAQ in our tone.'],
+      ['instructions', 'textarea', 'Read the pricing page. Answer each question in two sentences.'],
+    ]);
+    expect(form.notes).toEqual([
+      'Private to you until an Admin shares it.',
+      'It shapes how Chat works: it adds no tool and skips no card.',
+    ]);
+  });
+
+  it('saves the draft as the card was edited, and refuses a /name it can’t keep', () => {
+    const apply = (values: Record<string, string>) =>
+      tool().form!.apply(input as never, values, ctx);
+    expect(
+      apply({
+        name: ' /Pricing-Brief ',
+        title: 'Pricing brief',
+        description: ' Opens with the answer. ',
+        instructions: 'Answer first, then three sections.',
+      }),
+    ).toEqual({
+      ok: true,
+      input: {
+        name: 'pricing-brief',
+        title: 'Pricing brief',
+        description: 'Opens with the answer.',
+        instructions: 'Answer first, then three sections.',
+      },
+    });
+    // An empty title falls back to the name.
+    expect(apply({ title: '' })).toMatchObject({ ok: true, input: { title: undefined } });
+    expect(apply({ name: 'pricing faq' })).toEqual({
+      ok: false,
+      error: 'Use lowercase letters, digits and single hyphens, such as pricing-faq.',
+    });
+    expect(apply({ name: 'winback' })).toEqual({
+      ok: false,
+      error: '/winback is an Ansvisor skill or shortcut. Pick another name.',
+    });
+  });
+
+  it('says it was saved on its step, and nothing when it wasn’t', () => {
+    expect(tool().doneStep!(input as never, { ok: true, value: { id: 's1' } })).toEqual({
+      label: 'Saved skill: /pricing-faq',
+      detail: 'Private to you · Skills › My skills',
+    });
+    expect(tool().doneStep!(input as never, { ok: false })).toBeNull();
   });
 });

@@ -120,6 +120,17 @@ describe('agentFormSetupFor', () => {
     });
   });
 
+  it('carries the time zone the person picked in Settings › Account, null for Automatic', async () => {
+    expect((await setupOf(PEOPLE.manager)).timeZone).toBeNull();
+
+    db.tables.profiles = db.tables.profiles.map((row) =>
+      row.id === PEOPLE.manager ? { ...row, time_zone: 'Asia/Tokyo' } : row,
+    );
+    expect((await setupOf(PEOPLE.manager)).timeZone).toBe('Asia/Tokyo');
+    // Another person's pick isn't theirs.
+    expect((await setupOf(PEOPLE.admin)).timeZone).toBeNull();
+  });
+
   it('names only the agents the person sees; an Admin sees them all', async () => {
     expect((await setupOf(PEOPLE.manager)).takenNames.sort()).toEqual(['My own', 'Shared one']);
     expect((await setupOf(PEOPLE.admin)).takenNames.sort()).toEqual([
@@ -127,6 +138,24 @@ describe('agentFormSetupFor', () => {
       'Shared one',
       'Their private',
     ]);
+  });
+
+  it('offers Can call the agents the person sees that are on or paused, by name; locked below Growth', async () => {
+    db.tables.chat_agents[0].status = 'active';
+    db.tables.chat_agents[1].status = 'draft';
+    db.tables.chat_agents[2].status = 'paused';
+    expect(await setupOf(PEOPLE.manager)).toMatchObject({
+      callable: [{ id: 'a1', name: 'Shared one' }],
+      canCallLocked: false,
+    });
+    expect((await setupOf(PEOPLE.admin)).callable).toEqual([
+      { id: 'a1', name: 'Shared one' },
+      { id: 'a3', name: 'Their private' },
+    ]);
+    db.tables.organizations = db.tables.organizations.map((org) =>
+      org.id === ORG ? { ...org, plan: 'starter' } : org,
+    );
+    expect((await setupOf(PEOPLE.manager)).canCallLocked).toBe(true);
   });
 
   it('locks Full auto below Growth, hides it where Settings › Chat turned it off, and follows Settings › Chat’s defaults', async () => {

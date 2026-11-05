@@ -1,4 +1,10 @@
 import { API_BASE_URL } from '@/config/api';
+import { supabaseAdmin } from '@/lib/supabase/admin';
+import {
+  modelProviderOn,
+  parseProviderChoices,
+  type ModelProviderChoices,
+} from './model-providers';
 import { AUTO_MODEL, OFFERED_MODELS, offeredModel } from './models';
 
 /**
@@ -83,21 +89,29 @@ async function readServerMenu(selected: string | null): Promise<ServerMenu | nul
 }
 
 /**
- * The menu for a workspace. `ownKeyProvider`: the provider of the own key
- * Chat runs on, if any; its models say "Your key". When the API server
- * doesn't answer, the offered models still show, with no multipliers.
+ * The menu for a workspace. `ownKeyProviders`: the providers of the own keys
+ * for Chat (ownChatKeyProviders); a model says "Your key" when one runs it,
+ * in resolvePickedModelKey's order: its provider's key, else an OpenRouter
+ * one. When the API server doesn't answer, the offered models still show,
+ * with no multipliers.
  */
 export async function readModelMenu({
   selected = null,
-  ownKeyProvider = null,
+  ownKeyProviders = [],
+  providers = {},
 }: {
   selected?: string | null;
-  ownKeyProvider?: string | null;
+  ownKeyProviders?: readonly string[];
+  /** The workspace's model providers (W4-34): a provider that is off has no model here. */
+  providers?: ModelProviderChoices;
 } = {}): Promise<ChatModelMenu> {
   const server = await readServerMenu(selected);
   const byId = new Map((server?.models ?? []).map((model) => [model.id, model]));
   const models: ChatMenuModel[] = [];
   for (const offered of OFFERED_MODELS) {
+    // A model through OpenRouter needs Ansvisor's OpenRouter key (W4-03).
+    if (offered.provider === 'openrouter' && !process.env.OPENROUTER_API_KEY) continue;
+    if (!modelProviderOn(providers, offered.id)) continue;
     const listed = byId.get(offered.id);
     // The server leaves a dropped model out; with no answer, every offered one shows.
     if (server && !listed) continue;
@@ -107,7 +121,7 @@ export async function readModelMenu({
       multiplier: listed?.multiplier ?? null,
       tone: listed?.tone ?? null,
       variesByHour: listed?.variesByHour ?? false,
-      yourKey: ownKeyProvider === offered.provider,
+      yourKey: ownKeyProviders.includes(offered.provider) || ownKeyProviders.includes('openrouter'),
     });
   }
   const chosen = selected && selected !== AUTO_MODEL ? selected : null;
@@ -117,11 +131,33 @@ export async function readModelMenu({
     selected: chosen
       ? {
           id: chosen,
-          // A model no longer offered runs Auto too.
-          removed: !offeredModel(chosen) || (server?.selected?.removed ?? false),
+          // A model no longer offered, or of a provider turned off, runs Auto too.
+          removed:
+            !offeredModel(chosen) ||
+            !modelProviderOn(providers, chosen) ||
+            (server?.selected?.removed ?? false),
         }
       : null,
     catalogCount: server?.catalogCount ?? 0,
     updatedAt: server?.updatedAt ?? null,
   };
+}
+
+/**
+ * The workspace's model provider choices (chat_settings.model_providers,
+ * 00469); none before the migration or without a row, so each takes its
+ * default. Throws on another read error: the caller decides.
+ */
+export async function readProviderChoices(organizationId: string): Promise<ModelProviderChoices> {
+  const { data, error } = await supabaseAdmin
+    .from('chat_settings')
+    .select('model_providers')
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) {
+    // The web ahead of 00469: every provider on its default.
+    if (error.code === '42703' || (error.message ?? '').includes('model_providers')) return {};
+    throw new Error(`Could not read the model providers: ${error.message}`);
+  }
+  return parseProviderChoices((data as { model_providers?: unknown } | null)?.model_providers);
 }

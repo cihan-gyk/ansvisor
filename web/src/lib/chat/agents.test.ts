@@ -277,6 +277,74 @@ describe('creating an agent', () => {
     expect((await create(PEOPLE.admin, { maxMonthShare: 0.3 })).maxMonthShare).toBe(0.3);
   });
 
+  it('lets an agent run others of the workspace on Growth: never itself, an archived one or another’s', async () => {
+    const callee = (await create(PEOPLE.manager, { name: 'FAQ writer' })).id;
+    const caller = await create(PEOPLE.manager, { canCall: [callee] });
+    expect(rows('chat_agent_versions').find((v) => v.agent_id === caller.id)?.can_call).toEqual([
+      callee,
+    ]);
+    const ctx = await ctxOf(PEOPLE.manager);
+    expect(
+      await agents.createAgent(ctx, input({ name: 'Theirs', canCall: [FOREIGN] }), NOW),
+    ).toMatchObject({ ok: false, refusal: { status: 400, code: 'agent_not_found' } });
+    expect(
+      await agents.updateAgent(
+        ctx,
+        caller.id,
+        updateAgentInput.parse({ canCall: [caller.id], expectedVersion: 1 }),
+        NOW,
+      ),
+    ).toMatchObject({ ok: false, refusal: { code: 'agent_not_found' } });
+    agentRow(callee).status = 'archived';
+    expect(
+      await agents.createAgent(ctx, input({ name: 'Another', canCall: [callee] }), NOW),
+    ).toMatchObject({ ok: false, refusal: { code: 'agent_not_found' } });
+    agentRow(callee).status = 'draft';
+    db.tables.organizations[0].plan = 'starter';
+    expect(
+      await agents.createAgent(
+        await ctxOf(PEOPLE.manager),
+        input({ name: 'Another', canCall: [callee] }),
+        NOW,
+      ),
+    ).toMatchObject({
+      ok: false,
+      refusal: { code: 'plan_locked', denial: { needsPlan: 'Growth' } },
+    });
+  });
+
+  it('lets Can call name only agents the person saving it sees; a copy drops the others', async () => {
+    // An Admin's private agent, and a workspace agent naming it.
+    const hidden = (await create(PEOPLE.admin, { name: 'Private helper' })).id;
+    const shared = (await create(PEOPLE.admin, { name: 'FAQ writer', visibility: 'workspace' })).id;
+    const caller = await create(PEOPLE.admin, {
+      visibility: 'workspace',
+      canCall: [hidden, shared],
+    });
+    const ctx = await ctxOf(PEOPLE.manager);
+    expect(
+      await agents.createAgent(ctx, input({ name: 'Mine', canCall: [hidden] }), NOW),
+    ).toMatchObject({ ok: false, refusal: { code: 'agent_not_found' } });
+    // An Admin's pick stays when a Manager edits the agent; one they add has to be theirs to see.
+    agentRow(caller.id).owner_id = PEOPLE.manager;
+    const mine = (await create(PEOPLE.manager, { name: 'Their own' })).id;
+    expect(
+      await agents.updateAgent(
+        ctx,
+        caller.id,
+        updateAgentInput.parse({ canCall: [hidden, shared, mine], expectedVersion: 1 }),
+        NOW,
+      ),
+    ).toMatchObject({ ok: true });
+    const copy = await agents.duplicateAgent(ctx, caller.id, NOW);
+    expect(copy).toMatchObject({ ok: true });
+    const copyId = (copy as { value: { id: string } }).value.id;
+    expect(rows('chat_agent_versions').find((v) => v.agent_id === copyId)?.can_call).toEqual([
+      shared,
+      mine,
+    ]);
+  });
+
   it('takes only the workspace’s brands and topics, never the demo brand', async () => {
     const ctx = await ctxOf(PEOPLE.manager);
     expect(
@@ -1179,6 +1247,60 @@ describe('reading', () => {
     for (const trigger of rows('chat_agent_triggers')) expect(body).not.toContain(trigger.id);
   });
 
+  it('says which agent called a run, and opens a run’s calls with their shares', async () => {
+    const caller = await create(PEOPLE.manager, { name: 'Weekly report' });
+    const callee = await create(PEOPLE.manager, { name: 'FAQ writer' });
+    // Can call offers agents that are on or paused: a draft hasn't passed its checks.
+    agentRow(callee.id).status = 'active';
+    const run = (id: string, agentId: string, over: Record<string, unknown> = {}) =>
+      db.tables.chat_agent_runs.push({
+        id,
+        organization_id: ORG,
+        agent_id: agentId,
+        agent_version: 1,
+        brand_id: BRAND,
+        trigger_kind: 'schedule',
+        acting_user_id: PEOPLE.manager,
+        status: 'done',
+        skipped_reason: null,
+        stop_reason: null,
+        max_share: 0.1,
+        usage_share: 0.04,
+        outcome: null,
+        outcome_confidence: null,
+        queued_at: '2026-10-28T09:00:00.000Z',
+        started_at: '2026-10-28T09:00:01.000Z',
+        finished_at: '2026-10-28T09:05:00.000Z',
+        called_by_run_id: null,
+        ...over,
+      });
+    run('dddddddd-0000-4000-8000-000000000001', caller.id);
+    run('dddddddd-0000-4000-8000-000000000002', callee.id, {
+      trigger_kind: 'agent',
+      called_by_run_id: 'dddddddd-0000-4000-8000-000000000001',
+      max_share: 0.06,
+      usage_share: 0.015,
+      queued_at: '2026-10-28T09:01:00.000Z',
+    });
+    const ctx = await ctxOf(PEOPLE.manager);
+    const callerView = await agents.readAgent(ctx, caller.id, NOW);
+    expect(callerView).toMatchObject({
+      recentRuns: [
+        {
+          triggerKind: 'schedule',
+          calls: [{ agent: 'FAQ writer', status: 'done', usageShare: 0.015, maxShare: 0.06 }],
+        },
+      ],
+      // Can call's choices: the workspace's other agents, never itself.
+      canCall: { options: [{ id: callee.id, name: 'FAQ writer' }], locked: false },
+    });
+    const calleeView = await agents.readAgent(ctx, callee.id, NOW);
+    expect(calleeView).toMatchObject({
+      recentRuns: [{ triggerKind: 'agent', calledBy: 'Weekly report' }],
+    });
+    expect(JSON.stringify(calleeView)).not.toContain('dddddddd-0000');
+  });
+
   it('gives a run whose chat was deleted no chat to open', async () => {
     const { id } = await create(PEOPLE.manager);
     db.tables.chat_agent_runs.push({
@@ -1371,5 +1493,118 @@ describe('brand access (Selected brands)', () => {
     const admin = await ctxOf(PEOPLE.admin);
     expect(await agents.readAgent(admin, shared.id, NOW)).not.toBeNull();
     expect(await agents.listAgentRuns(admin, mine.id, 50)).toHaveLength(3);
+  });
+});
+
+describe('the demo brand’s sample agents (00475)', () => {
+  const DEMO_AGENT = '88888888-8888-4888-8888-000000000475';
+  beforeEach(() => {
+    db.tables.chat_agents.push({
+      id: DEMO_AGENT,
+      organization_id: ORG,
+      name: 'Brewline visibility watch',
+      status: 'active',
+      paused_reason: null,
+      owner_id: PEOPLE.admin,
+      visibility: 'workspace',
+      version: 1,
+      fail_count: 0,
+      max_run_share: 0.1,
+      max_month_share: null,
+      created_by: PEOPLE.admin,
+      created_at: NOW.toISOString(),
+      updated_at: NOW.toISOString(),
+      activated_at: NOW.toISOString(),
+      archived_at: null,
+      demo_brand_id: DEMO,
+    });
+    db.tables.chat_agent_versions.push({
+      agent_id: DEMO_AGENT,
+      version: 1,
+      skill_ids: ['report'],
+      instructions: null,
+      mode: 'auto',
+      connections: [],
+      model: 'auto',
+      effort: 'normal',
+      scope: { brand_ids: [DEMO] },
+      notify_user_ids: [],
+      followup_days: 14,
+      created_at: NOW.toISOString(),
+    });
+  });
+
+  it('shows one, but never changes, runs or copies it: the plans instead', async () => {
+    const admin = await ctxOf(PEOPLE.admin);
+    for (const act of ['edit', 'pause', 'archive', 'duplicate', 'run', 'takeOver'] as const) {
+      expect(await agents.agentForAct(admin, DEMO_AGENT, act), act).toMatchObject({
+        ok: false,
+        refusal: { status: 402, code: 'demo_brand' },
+      });
+    }
+    expect(await agents.changeAgentState(admin, DEMO_AGENT, 'pause')).toMatchObject({
+      ok: false,
+      refusal: { code: 'demo_brand' },
+    });
+    expect(rows('chat_agents').find((a) => a.id === DEMO_AGENT)).toMatchObject({
+      status: 'active',
+    });
+    expect(await agents.readAgent(admin, DEMO_AGENT, NOW)).not.toBeNull();
+  });
+
+  it('leaves it out of the plan’s active agents and of what may run', async () => {
+    db.tables.organizations[0] = { ...db.tables.organizations[0], plan: 'starter' };
+    const manager = await ctxOf(PEOPLE.manager);
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) ids.push((await create(PEOPLE.manager, { name: `Agent ${i}` })).id);
+    // Five of Starter's five, with the demo's agent active beside them.
+    for (const id of ids)
+      expect((await agents.changeAgentState(manager, id, 'activate')).ok).toBe(true);
+
+    const workspace = await agents.listAgents(manager, { view: 'workspace' }, NOW);
+    expect(workspace.agents.map((a) => a.name)).toContain('Brewline visibility watch');
+    expect(workspace).toMatchObject({ active: 5, activeInWorkspace: 5, activeLimit: 5 });
+    expect((await agents.runnableAgents(manager)).map((a) => a.row.id)).not.toContain(DEMO_AGENT);
+  });
+
+  it('never lets Can call name it, not even one stored before: the save is refused', async () => {
+    const admin = await ctxOf(PEOPLE.admin);
+    const named = await agents.createAgent(
+      admin,
+      input({ name: 'Caller', canCall: [DEMO_AGENT] }),
+      NOW,
+    );
+    expect(named).toMatchObject({
+      ok: false,
+      refusal: {
+        status: 400,
+        code: 'demo_agent',
+        message: expect.stringContaining('sample agent of the demo brand'),
+      },
+    });
+    expect(rows('chat_agents').map((a) => a.name)).not.toContain('Caller');
+
+    // One a Can call stored before (picked when nothing refused it): a change keeping it is refused.
+    const faq = (await create(PEOPLE.admin, { name: 'FAQ writer' })).id;
+    const caller = await create(PEOPLE.admin, { name: 'Weekly report' });
+    rows('chat_agent_versions').find((v) => v.agent_id === caller.id)!.can_call = [DEMO_AGENT];
+    expect(
+      await agents.updateAgent(
+        admin,
+        caller.id,
+        updateAgentInput.parse({ canCall: [DEMO_AGENT, faq], expectedVersion: 1 }),
+        NOW,
+      ),
+    ).toMatchObject({ ok: false, refusal: { code: 'demo_agent' } });
+    expect(rows('chat_agent_versions').filter((v) => v.agent_id === caller.id)).toHaveLength(1);
+    // Taking it out saves.
+    expect(
+      await agents.updateAgent(
+        admin,
+        caller.id,
+        updateAgentInput.parse({ canCall: [], expectedVersion: 1 }),
+        NOW,
+      ),
+    ).toMatchObject({ ok: true });
   });
 });

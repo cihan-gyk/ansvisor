@@ -29,6 +29,7 @@ import cloroCallbackRoutes from './routes/cloro-callback.js';
 import internalTriggerTrackingRoutes from './routes/internal-trigger-tracking.js';
 import internalChatBudgetRoutes from './routes/internal-chat-budget.js';
 import internalChatNoticesRoutes from './routes/internal-chat-notices.js';
+import internalChatSchedulesRoutes from './routes/internal-chat-schedules.js';
 import internalChatPagesRoutes from './routes/internal-chat-pages.js';
 import internalChatModelsRoutes from './routes/internal-chat-models.js';
 import internalChatGoLiveRoutes from './routes/internal-chat-go-live.js';
@@ -51,6 +52,7 @@ import { sweepImproveOutcomes } from './lib/action-center/improve-outcome.js';
 import { sweepBrandFacts } from './lib/brand-facts-sweep.js';
 import { purgeRemovedCatalogProducts } from './lib/catalog/purge.js';
 import { sweepExpiredChatUploads } from './lib/chat-uploads-sweep.js';
+import { sweepAiImageOptions } from './lib/ai-image-options-sweep.js';
 import { sweepIdleDemoBrands } from './lib/demo/idle-sweep.js';
 import { sweepCatalogSources } from './lib/catalog/sources.js';
 import { sweepShoppingCardMatches } from './lib/catalog/card-match.js';
@@ -94,6 +96,7 @@ import { startChatAgentTicks } from './lib/chat-agents.js';
 import { startModelPriceSync } from './lib/model-prices.js';
 import { startDailySuggestions } from './lib/chat-suggestions/job.js';
 import { startImpactLedger } from './lib/impact-ledger/job.js';
+import { startReportCardQueue } from './lib/report-card/queue.js';
 
 // Before anything starts: a stray rejection is logged, not a crash.
 handleProcessErrors();
@@ -383,6 +386,12 @@ async function runDailyTracking() {
     logger.error({ err }, '[chat-uploads] daily sweep failed');
   });
 
+  // The Content Editor's AI image options nobody kept (W4-09): a day after
+  // they were made, what is left in each organization's ai-options/ goes.
+  sweepAiImageOptions().catch((err) => {
+    logger.error({ err }, '[content-images] daily AI image options sweep failed');
+  });
+
   // Demo brands nobody opened for two weeks (00380): their sample rows go,
   // the brand row stays, and the next visit builds them again.
   sweepIdleDemoBrands().catch((err) => {
@@ -669,6 +678,11 @@ app.use('/api/internal/chat/budget', internalChatBudgetRoutes);
 // per failure episode and one reminder (routes/internal-chat-notices.js, 00441).
 app.use('/api/internal/chat/notices', internalChatNoticesRoutes);
 
+// --- Internal Chat scheduled jobs (CRON_SECRET auth, called by the web's scheduled-job worker) ---
+// A job's result by e-mail, and its "didn't run" and "paused" notes, to its creator and
+// the workspace's people it names (routes/internal-chat-schedules.js, CHAT-12).
+app.use('/api/internal/chat/schedules', internalChatSchedulesRoutes);
+
 // --- Internal Chat page reads (CRON_SECRET auth, called by the web's Chat engine) ---
 // fetch_page (CHAT-10 §B): a public page opened through safe-fetch's rules and
 // read on the server; only what Chat reads of it goes back (routes/internal-chat-pages.js).
@@ -917,6 +931,11 @@ server.listen(PORT, async () => {
     // rollups only (no engine query, no model call).
     startImpactLedger();
   }
+
+  // The free report cards from www.ansvisor.com's form (lib/report-card):
+  // Ansvisor's own marketing, so the cloud server's only. Every minute the
+  // due cards start within the day's cap and the month's budget.
+  if (isCloud()) startReportCardQueue();
 
   if (!isCloud()) {
     const schedule = process.env.DAILY_CRON_SCHEDULE || '0 6 * * *';
