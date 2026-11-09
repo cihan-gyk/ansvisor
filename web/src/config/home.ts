@@ -31,7 +31,16 @@ export function landingPageFor({
   return chatOn && !chatHidden && isCloud() ? CHAT_HOME : DASHBOARD_HOME;
 }
 
-/** Whether a sidebar item leads to the home page (it or a parent of it). */
-export function isDashboardHomeItem(href: string): boolean {
-  return DASHBOARD_HOME === href || DASHBOARD_HOME.startsWith(`${href}/`);
+/** The left menu's Chat item: it opens the new Chat (CHAT_HOME) where it is on. */
+export const CHAT_MENU_HREF = '/dashboard/agent';
+
+/**
+ * Whether a menu item leads to where the person starts (landingPageFor): the
+ * Chat item while the new Chat is on, on Ansvisor Cloud; else the Action
+ * Center (the item, or a parent of DASHBOARD_HOME). Onboarding's preview of
+ * the dashboard marks it.
+ */
+export function isDashboardHomeItem(href: string, chatOn = false): boolean {
+  const home = landingPageFor({ chatOn }) === CHAT_HOME ? CHAT_MENU_HREF : DASHBOARD_HOME;
+  return home === href || home.startsWith(`${href}/`);
 }

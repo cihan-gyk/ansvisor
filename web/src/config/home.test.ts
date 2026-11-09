@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CHAT_HOME, DASHBOARD_HOME, isDashboardHomeItem, landingPageFor } from './home';
+import { dashboardNav } from '@/config/dashboard';
+import {
+  CHAT_HOME,
+  CHAT_MENU_HREF,
+  DASHBOARD_HOME,
+  isDashboardHomeItem,
+  landingPageFor,
+} from './home';
 import { ACTION_CENTER_TABS } from '@/lib/action-center/tabs';
 
 /**
@@ -11,11 +18,30 @@ describe('the dashboard home', () => {
     expect(DASHBOARD_HOME).toBe('/dashboard/action-center/actions');
   });
 
-  it('marks the Action Center item as the one the home page sits under', () => {
+  it('marks the Action Center item as the one the home page sits under while Chat is off', () => {
     expect(isDashboardHomeItem('/dashboard/action-center')).toBe(true);
     expect(isDashboardHomeItem('/dashboard/action-center/actions')).toBe(true);
     expect(isDashboardHomeItem('/dashboard/insights')).toBe(false);
     expect(isDashboardHomeItem('/dashboard/action')).toBe(false);
+    expect(isDashboardHomeItem(CHAT_MENU_HREF)).toBe(false);
+  });
+
+  it('marks the Chat item instead with the new Chat on, on Ansvisor Cloud (2026-11-09)', () => {
+    vi.stubEnv('NEXT_PUBLIC_IS_CLOUD', 'true');
+    try {
+      expect(isDashboardHomeItem(CHAT_MENU_HREF, true)).toBe(true);
+      expect(isDashboardHomeItem('/dashboard/action-center', true)).toBe(false);
+      vi.stubEnv('NEXT_PUBLIC_IS_CLOUD', 'false');
+      expect(isDashboardHomeItem(CHAT_MENU_HREF, true)).toBe(false);
+      expect(isDashboardHomeItem('/dashboard/action-center', true)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("names the left menu's Chat item", () => {
+    const items = dashboardNav.flatMap((group) => group.items);
+    expect(items.find((item) => item.title === 'Chat')?.href).toBe(CHAT_MENU_HREF);
   });
 
   it('opens the Action Center on Actions, then Signals, KPIs and History', () => {

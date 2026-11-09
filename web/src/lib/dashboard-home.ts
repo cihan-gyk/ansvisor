@@ -1,4 +1,4 @@
-import { DASHBOARD_HOME, landingPageFor } from '@/config/home';
+import { CHAT_MENU_HREF, DASHBOARD_HOME, landingPageFor } from '@/config/home';
 import { isCloud } from '@/config/plans';
 import { chatAgenticEnabled } from '@/lib/chat/flag';
 import {
@@ -13,12 +13,8 @@ import type { UserRole } from '@/types';
 
 type Reader = Awaited<ReturnType<typeof createClient>>;
 
-/**
- * Chat's section of the left menu: its menu item is /dashboard/agent, which
- * opens the new Chat where it is on. Menu access and work areas hide it by
- * this name.
- */
-export const CHAT_MENU_SECTION = menuSectionOf('/dashboard/agent') as string;
+/** Chat's section of the left menu (its item, CHAT_MENU_HREF): menu access and work areas hide it by this name. */
+export const CHAT_MENU_SECTION = menuSectionOf(CHAT_MENU_HREF) as string;
 
 /** The profile columns the landing page reads: the organization and the person's menu. */
 export const LANDING_PROFILE_COLUMNS =

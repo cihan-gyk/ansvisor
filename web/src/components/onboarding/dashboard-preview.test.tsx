@@ -6,7 +6,8 @@ import messages from '../../../messages/en.json';
 
 /**
  * The dashboard drawn behind the onboarding wizard: its menu is the one the
- * wizard leads to, Agent Center in it only with the new Chat on.
+ * wizard leads to, Agent Center in it only with the new Chat on, and the
+ * item marked is where the person will start.
  */
 
 vi.mock('next/image', () => ({
@@ -53,6 +54,9 @@ async function render(chatAgentic: boolean) {
 }
 
 const menu = () => [...container.querySelectorAll('aside span.truncate')].map((s) => s.textContent);
+/** The menu items drawn as the start page. */
+const marked = () =>
+  [...container.querySelectorAll('aside div.bg-accent span.truncate')].map((s) => s.textContent);
 
 describe('DashboardPreview', () => {
   it('shows Agent Center under Chat with the new Chat on', async () => {
@@ -66,5 +70,17 @@ describe('DashboardPreview', () => {
     await render(false);
     expect(menu()).toContain('Chat');
     expect(menu()).not.toContain('Agent Center');
+  });
+
+  it('marks where the person will start: Chat with the new Chat on, else the Action Center', async () => {
+    vi.stubEnv('NEXT_PUBLIC_IS_CLOUD', 'true');
+    try {
+      await render(true);
+      expect(marked()).toEqual(['Chat']);
+      await render(false);
+      expect(marked()).toEqual(['Action Center']);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

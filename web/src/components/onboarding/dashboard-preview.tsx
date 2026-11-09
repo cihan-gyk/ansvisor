@@ -104,7 +104,7 @@ export function DashboardPreview({
                       key={item.href}
                       className={cn(
                         'flex items-center gap-3 rounded-md px-2 py-1.5 text-[13px] font-medium',
-                        isDashboardHomeItem(item.href)
+                        isDashboardHomeItem(item.href, chatAgentic)
                           ? 'bg-accent text-accent-foreground'
                           : 'text-muted-foreground',
                       )}
