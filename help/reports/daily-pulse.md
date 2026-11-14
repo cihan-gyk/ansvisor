@@ -19,7 +19,7 @@ Open **Settings › Notifications**. Every active brand has its own row with a f
 
 - **Daily**: after every scheduled daily tracking run.
 - **Weekly**: once a week on Monday (UTC), covering the last 7 days compared with the 7 days before.
-- **Only when notable** (the default for new brands): your first pulse always goes out, so you see your starting point. After that it is like Daily, but skipped when there are no highlights and no warnings. A brand that already saved **Daily** keeps it.
+- **Only when notable** (the default): your first pulse always goes out, so you see your starting point. After that it is like Daily, but skipped when there are no highlights and no warnings. Brands that never chose a frequency use this; a brand whose admin saved **Daily** keeps it.
 - **Off**: no email, no webhook and no Slack post.
 
 ## Choose who gets it
