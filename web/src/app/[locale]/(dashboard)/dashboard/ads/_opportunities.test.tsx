@@ -23,6 +23,7 @@ vi.mock('@/i18n/navigation', () => ({
 vi.mock('@/lib/analytics', () => ({ track: vi.fn() }));
 const api = vi.hoisted(() => ({
   readAdsOpportunities: vi.fn(),
+  readAdsOpportunity: vi.fn(),
   setAdsDecision: vi.fn(),
   readAdsSettings: vi.fn(),
   saveAdsSettings: vi.fn(),
@@ -82,6 +83,7 @@ let root: Root;
 
 beforeEach(() => {
   for (const fn of [...Object.values(api), toast.error, toast.success]) fn.mockReset();
+  api.readAdsOpportunity.mockResolvedValue({ promptId: 'p3', answers: [] });
   useBrandStore.setState({ brands: [], activeBrandId: 'b1' });
   container = document.createElement('div');
   document.body.appendChild(container);
