@@ -157,7 +157,8 @@ function LockRow({ locked }: { locked: number }) {
   useUpgradeWallShown({ reason: 'plan', feature: 'ads_read', source: 'ads' });
   return (
     <TableRow data-slot="ads-lock-row" className="hover:bg-transparent">
-      <TableCell colSpan={6}>
+      {/* py-3 and a small button: a two-line data row's height. */}
+      <TableCell colSpan={6} className="py-3">
         <div className="flex items-center gap-2">
           <Lock aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 text-xs text-muted-foreground">
@@ -166,7 +167,7 @@ function LockRow({ locked }: { locked: number }) {
           <Link
             href="/dashboard/settings?tab=billing"
             data-action="plan.upgrade"
-            className={buttonVariants({ variant: 'outline', size: 'sm' })}
+            className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
           >
             {tCommon('upgrade')}
           </Link>

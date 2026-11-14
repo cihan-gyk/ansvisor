@@ -226,6 +226,9 @@ describe('AdsOpportunities', () => {
     );
     const upgrade = lock.querySelector('[data-action="plan.upgrade"]')!;
     expect(upgrade.textContent).toBe('Upgrade');
+    // An outlined button, like Open: its border isn't the base's transparent one.
+    expect(upgrade.className).toContain('border-border');
+    expect(upgrade.className).not.toContain('border-transparent');
     expect(upgrade.getAttribute('href')).toBe('/dashboard/settings?tab=billing');
     // Locked rows stay locked under each filter.
     await click(filter('Earn · 0'));
