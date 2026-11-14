@@ -56,6 +56,7 @@ const row = (promptId: string, decision: AdsDecision, over: Partial<AdsOpportuni
   estAiVolume: 6300,
   adChannels: ['chatgpt', 'google'] as AdsOpportunity['adChannels'],
   paidMeasured: false,
+  reasons: [],
   ...over,
 });
 const ROWS: AdsOpportunity[] = [
@@ -83,7 +84,12 @@ let root: Root;
 
 beforeEach(() => {
   for (const fn of [...Object.values(api), toast.error, toast.success]) fn.mockReset();
-  api.readAdsOpportunity.mockResolvedValue({ promptId: 'p3', answers: [] });
+  api.readAdsOpportunity.mockResolvedValue({
+    promptId: 'p3',
+    answers: [],
+    fanOuts: [],
+    keywords: [],
+  });
   useBrandStore.setState({ brands: [], activeBrandId: 'b1' });
   container = document.createElement('div');
   document.body.appendChild(container);
