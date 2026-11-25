@@ -133,10 +133,12 @@ describe('per-platform providers', () => {
   it('reads pairs in any case and spacing, and ignores broken ones with a warning', () => {
     warn.mockClear();
     const overrides = platformOverrides({
-      PLATFORM_PROVIDER_OVERRIDES: ' Copilot-Web = CLORO , grok-web=nowhere, gemini-web, a=b=c ',
+      PLATFORM_PROVIDER_OVERRIDES:
+        ' Copilot-Web = CLORO , grok-web=nowhere, gemini-web, a=b=c, copilot=cloro ',
     });
     expect([...overrides]).toEqual([['copilot-web', 'cloro']]);
-    expect(warn).toHaveBeenCalledTimes(3);
+    // copilot=cloro names no platform (it's copilot-web), so it's a typo too.
+    expect(warn).toHaveBeenCalledTimes(4);
   });
 
   it("skips a platform only when its own provider can't deliver it", () => {

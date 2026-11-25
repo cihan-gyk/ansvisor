@@ -79,6 +79,7 @@ let taskIds = 0;
 const cloroSubmit = vi.hoisted(() => vi.fn());
 vi.mock('../lib/cloro-scraper.js', () => ({
   UNAVAILABLE_PLATFORMS: ['grok-web', 'perplexity-web'],
+  SCRAPER_TASK_TYPES: { 'chatgpt-web': 'CHATGPT', 'copilot-web': 'BING_AIMODE' },
   submitPromptTask: cloroSubmit,
   submitScraperTask: vi.fn(),
   isLegacyChatgptTask: vi.fn(() => false),
@@ -88,6 +89,7 @@ vi.mock('../lib/cloro-scraper.js', () => ({
 const anakinSubmit = vi.hoisted(() => vi.fn());
 vi.mock('../lib/anakin-scraper.js', () => ({
   UNAVAILABLE_PLATFORMS: [],
+  ANAKIN_ENGINES: { 'chatgpt-web': {}, 'copilot-web': {} },
   submitPromptTask: anakinSubmit,
   submitScraperTask: vi.fn(),
   isLegacyChatgptTask: vi.fn(() => false),

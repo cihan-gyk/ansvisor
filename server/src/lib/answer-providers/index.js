@@ -26,7 +26,9 @@
  */
 import * as anakin from './anakin.js';
 import * as cloro from './cloro.js';
+import { ANAKIN_ENGINES } from '../anakin-scraper.js';
 import { CLORO_COUNTRY_MODELS } from '../cloro-countries.js';
+import { SCRAPER_TASK_TYPES } from '../cloro-scraper.js';
 import { logger } from '../logger.js';
 
 export const DEFAULT_PROVIDER = 'cloro';
@@ -37,6 +39,16 @@ const PROVIDERS = { cloro, anakin };
 export const PROVIDER_NAMES = Object.keys(PROVIDERS);
 
 const warned = new Set();
+
+/**
+ * Every platform some provider can ask: an override for any other name is a
+ * typo. Read on first use, so a setup without overrides never needs it.
+ */
+let knownPlatforms = null;
+function isKnownPlatform(platform) {
+  knownPlatforms ??= new Set([...Object.keys(ANAKIN_ENGINES), ...Object.keys(SCRAPER_TASK_TYPES)]);
+  return knownPlatforms.has(platform);
+}
 
 /**
  * The provider PLATFORM_PROVIDER names. Unset, blank or unknown: Cloro, as
@@ -74,7 +86,7 @@ export function platformOverrides(env = process.env) {
     const entry = pair.trim();
     if (!entry) continue;
     const [platform, provider, ...rest] = entry.split('=').map((part) => part.trim().toLowerCase());
-    if (!platform || !PROVIDERS[provider] || rest.length > 0) {
+    if (!isKnownPlatform(platform) || !PROVIDERS[provider] || rest.length > 0) {
       if (!warned.has(`override:${entry}`)) {
         warned.add(`override:${entry}`);
         logger.warn(
