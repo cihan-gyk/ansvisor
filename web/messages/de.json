@@ -467,6 +467,12 @@
     }
   },
   "onboarding": {
+    "theme": {
+      "label": "Design",
+      "light": "Hell",
+      "dark": "Dunkel",
+      "hint": "Jederzeit änderbar über ☀︎/☾ neben dem Logo im Menü."
+    },
     "setup": {
       "brandTitle": "Richten Sie Ihre Marke ein",
       "brandIntro": "Erfahren Sie, wie KI-Plattformen über Sie sprechen. Fügen Sie Ihre erste Marke hinzu, um loszulegen.",

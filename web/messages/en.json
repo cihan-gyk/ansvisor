@@ -467,6 +467,12 @@
     }
   },
   "onboarding": {
+    "theme": {
+      "label": "Theme",
+      "light": "Light",
+      "dark": "Dark",
+      "hint": "Change it any time with ☀︎/☾ next to the logo in the menu."
+    },
     "setup": {
       "brandTitle": "Set up your brand",
       "brandIntro": "See how AI platforms talk about you. Add your first brand to get started.",

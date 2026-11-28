@@ -1,3 +1,4 @@
+import { ThemeChoice } from '@/components/onboarding/theme-choice';
 import { cn } from '@/lib/utils';
 
 /**
@@ -26,6 +27,9 @@ export function OnboardingFrame({
         <div className="h-full w-full scale-[1.02] blur-[3px]">{preview}</div>
         <div className="absolute inset-0 bg-background/50" />
       </div>
+
+      {/* Light or dark, in the corner on every step: never a step of its own. */}
+      <ThemeChoice className="relative z-10 px-4 pt-3 md:fixed md:end-4 md:top-4 md:p-0" />
 
       <div className="relative flex min-h-svh flex-col md:p-8">
         <div

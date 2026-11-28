@@ -467,6 +467,12 @@
     }
   },
   "onboarding": {
+    "theme": {
+      "label": "Tema",
+      "light": "Chiaro",
+      "dark": "Scuro",
+      "hint": "Puoi cambiarlo quando vuoi con ☀︎/☾ accanto al logo nel menu."
+    },
     "setup": {
       "brandTitle": "Configura il tuo brand",
       "brandIntro": "Scopri come le piattaforme di IA parlano di te. Aggiungi il tuo primo brand per iniziare.",

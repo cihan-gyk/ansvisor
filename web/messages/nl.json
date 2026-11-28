@@ -467,6 +467,12 @@
     }
   },
   "onboarding": {
+    "theme": {
+      "label": "Thema",
+      "light": "Licht",
+      "dark": "Donker",
+      "hint": "Wijzig het altijd met ☀︎/☾ naast het logo in het menu."
+    },
     "setup": {
       "brandTitle": "Stel uw merk in",
       "brandIntro": "Ontdek hoe AI-platforms over u praten. Voeg uw eerste merk toe om aan de slag te gaan.",

@@ -21,6 +21,8 @@ On Ansvisor Cloud, new people start in dark mode for now. The sign-up, sign-in a
 
 Open the main menu: its sun or moon button sits beside the Ansvisor logo, at the top. When the menu is folded to icons, the button is hidden until you open it. On a phone, it is at the top of the menu. The moon switches to dark mode, and the sun to light mode.
 
+While you set up your first brand, the main menu isn't there yet: a **Light | Dark** switch sits in the top-right corner of every setup step instead, and switches at once.
+
 Your choice is kept in this browser, so each page opens in it. Another browser or device keeps its own mode. On Ansvisor Cloud, one where you never used Ansvisor starts in dark mode when you sign in there, until you switch.
 
 ## The account menu

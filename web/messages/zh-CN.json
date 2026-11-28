@@ -467,6 +467,12 @@
     }
   },
   "onboarding": {
+    "theme": {
+      "label": "主题",
+      "light": "浅色",
+      "dark": "深色",
+      "hint": "随时可在菜单中徽标旁的 ☀︎/☾ 按钮更改。"
+    },
     "setup": {
       "brandTitle": "设置您的品牌",
       "brandIntro": "了解各大 AI 平台如何评价您。添加您的第一个品牌以开始使用。",

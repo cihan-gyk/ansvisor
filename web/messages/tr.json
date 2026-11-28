@@ -467,6 +467,12 @@
     }
   },
   "onboarding": {
+    "theme": {
+      "label": "Tema",
+      "light": "Açık",
+      "dark": "Koyu",
+      "hint": "İstediğin zaman menüde logonun yanındaki ☀︎/☾ düğmesinden değiştirebilirsin."
+    },
     "setup": {
       "brandTitle": "Markanızı ayarlayın",
       "brandIntro": "AI platformlarının sizden nasıl bahsettiğini görün. Başlamak için ilk markanızı ekleyin.",

@@ -467,6 +467,12 @@
     }
   },
   "onboarding": {
+    "theme": {
+      "label": "Motyw",
+      "light": "Jasny",
+      "dark": "Ciemny",
+      "hint": "Zmienisz go w każdej chwili przyciskiem ☀︎/☾ obok logo w menu."
+    },
     "setup": {
       "brandTitle": "Skonfiguruj swoją markę",
       "brandIntro": "Zobacz, jak platformy AI mówią o Tobie. Dodaj swoją pierwszą markę, aby zacząć.",
