@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
+  Banknote,
   Eye,
   MessageSquare,
   MoreHorizontal,
@@ -12,6 +13,7 @@ import {
   PieChart,
   Quote,
   Smile,
+  Target,
   TrendingDown,
   TrendingUp,
   Trash2,
@@ -61,6 +63,8 @@ const KPI_ICONS: Record<KpiKey, React.ComponentType<{ className?: string }>> = {
   mentions: MessageSquare,
   share_of_voice: PieChart,
   ai_referral_traffic: MousePointerClick,
+  ai_conversions: Target,
+  ai_revenue: Banknote,
   positive_sentiment: Smile,
 };
 
@@ -92,7 +96,9 @@ const STATUS_BAR: Record<KpiStatus, string> = {
 
 /**
  * A KPI's value or target in its unit: "12.5%" for a share, "29.9/100" for
- * the Visibility score (a score, never a %: AC-02, D2), compact counts.
+ * the Visibility score (a score, never a %: AC-02, D2), compact counts, and
+ * money whole and compact with no symbol (the GA property's currency isn't
+ * stored, so none is guessed).
  */
 function formatKpiValue(
   value: number,
@@ -102,6 +108,7 @@ function formatKpiValue(
   const tenth = Math.round(value * 10) / 10;
   if (unit === 'percent') return `${tenth}%`;
   if (unit === 'points') return score(tenth);
+  if (unit === 'currency') return formatCompactNumber(Math.round(value));
   return formatCompactNumber(value);
 }
 
@@ -284,26 +291,40 @@ export function KpiTable({
                     <KpiSparkline points={kpi.trend} />
                   </div>
                 </TableCell>
-                <TableCell>
-                  <Badge variant="outline" className={STATUS_BADGE[kpi.status]}>
-                    <span
-                      aria-hidden="true"
-                      className="h-1.5 w-1.5 rounded-full bg-current opacity-70"
-                    />
-                    {t(`status.${kpi.status}`)}
-                  </Badge>
-                  {kpi.status === 'goal_reached' && onSetGoal && (
-                    <button
-                      type="button"
-                      data-action="kpis.setNewGoal"
-                      disabled={busyKey === kpi.key}
-                      onClick={() => setNewGoalFor(kpi)}
-                      className="mt-1 block text-start text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+                {/* A KPI that can't be held against its goal (AI Revenue
+                    without e-commerce tracking) says why instead of a
+                    status, and isn't read as a 0 against its target. */}
+                {kpi.note ? (
+                  <TableCell>
+                    <p
+                      className="max-w-48 text-xs text-muted-foreground"
+                      data-testid={`kpi-note-${kpi.key}`}
                     >
-                      {t('newGoal.prompt')}
-                    </button>
-                  )}
-                </TableCell>
+                      {t(`notes.${kpi.note}`)}
+                    </p>
+                  </TableCell>
+                ) : (
+                  <TableCell>
+                    <Badge variant="outline" className={STATUS_BADGE[kpi.status]}>
+                      <span
+                        aria-hidden="true"
+                        className="h-1.5 w-1.5 rounded-full bg-current opacity-70"
+                      />
+                      {t(`status.${kpi.status}`)}
+                    </Badge>
+                    {kpi.status === 'goal_reached' && onSetGoal && (
+                      <button
+                        type="button"
+                        data-action="kpis.setNewGoal"
+                        disabled={busyKey === kpi.key}
+                        onClick={() => setNewGoalFor(kpi)}
+                        className="mt-1 block text-start text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-50"
+                      >
+                        {t('newGoal.prompt')}
+                      </button>
+                    )}
+                  </TableCell>
+                )}
                 {/* The exact goal on hover: compact counts can look alike ("21.4k"). */}
                 <TableCell
                   className="text-xs text-muted-foreground tabular-nums"
@@ -312,7 +333,11 @@ export function KpiTable({
                   {formatKpiValue(kpi.target, kpi.unit, scoreOf)}
                 </TableCell>
                 <TableCell>
-                  <GoalProgress snapshot={kpi} />
+                  {kpi.note ? (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  ) : (
+                    <GoalProgress snapshot={kpi} />
+                  )}
                 </TableCell>
                 {editable && (
                   <TableCell>

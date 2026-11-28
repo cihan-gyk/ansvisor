@@ -1260,6 +1260,9 @@
         "goal_reached": "Ziel erreicht"
       },
       "pointsChange": "{value} Pkt.",
+      "notes": {
+        "no_revenue": "Google Analytics meldet keinen Umsatz; dafür ist E-Commerce-Tracking nötig"
+      },
       "score": "{value}/100",
       "vsGoalAria": "{progress} % des Ziels",
       "editKpis": "KPIs bearbeiten",
@@ -1335,6 +1338,7 @@
       "targetAria": "Zielwert für {name}",
       "invalidTarget": "Zielwerte müssen positiv sein; Prozent- und Score-Ziele dürfen 100 nicht überschreiten.",
       "scoreSuffix": "/100",
+      "needsGa": "Erfordert Google Analytics",
       "callout": {
         "title": "Dieses KPI-Framework steuert Ihr Aktionszentrum.",
         "description": "Aktionen und Empfehlungen werden basierend auf Ihren KPI-Zielen priorisiert."
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "KI-Referral-Traffic",
         "description": "Besuche über KI-Plattformen"
+      },
+      "ai_conversions": {
+        "name": "KI-Conversions",
+        "description": "Schlüsselereignisse aus KI-vermittelten Sitzungen (Google Analytics)"
+      },
+      "ai_revenue": {
+        "name": "KI-Umsatz",
+        "description": "Umsatz aus KI-vermittelten Sitzungen (Google Analytics)"
       },
       "positive_sentiment": {
         "name": "Positives Sentiment",

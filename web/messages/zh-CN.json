@@ -1260,6 +1260,9 @@
         "goal_reached": "已达成目标"
       },
       "pointsChange": "{value} 个百分点",
+      "notes": {
+        "no_revenue": "Google Analytics 未报告收入；需要启用电子商务跟踪"
+      },
       "score": "{value}/100",
       "vsGoalAria": "目标的 {progress}%",
       "editKpis": "编辑 KPI",
@@ -1335,6 +1338,7 @@
       "targetAria": "{name} 的目标值",
       "invalidTarget": "目标值必须为正数;百分比和分数目标不能超过 100。",
       "scoreSuffix": "/100",
+      "needsGa": "需要 Google Analytics",
       "callout": {
         "title": "此 KPI 框架将用于驱动您的行动中心。",
         "description": "操作与建议将根据您的 KPI 目标确定优先级。"
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "AI 引流流量",
         "description": "来自 AI 平台的访问量"
+      },
+      "ai_conversions": {
+        "name": "AI 转化",
+        "description": "来自 AI 引荐会话的关键事件（Google Analytics）"
+      },
+      "ai_revenue": {
+        "name": "AI 收入",
+        "description": "来自 AI 引荐会话的收入（Google Analytics）"
       },
       "positive_sentiment": {
         "name": "正面情绪",

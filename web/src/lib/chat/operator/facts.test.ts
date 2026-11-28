@@ -585,6 +585,18 @@ const byId = (facts: Awaited<ReturnType<typeof read>>) =>
   new Map(facts.candidates.map((c) => [c.agentId, c]));
 
 describe('readOperatorFacts', () => {
+  it('leaves out a KPI with a note: revenue Google Analytics never reported is not off track', async () => {
+    stand.kpis.mockResolvedValue({
+      configured: true,
+      kpis: [
+        { key: 'ai_revenue', status: 'off_track', value: 0, target: 1000, note: 'no_revenue' },
+        { key: 'mentions', status: 'on_track', value: 90, target: 100 },
+      ],
+    });
+    const facts = await read();
+    expect(facts.kpis).toEqual([{ key: 'mentions', status: 'on_track' }]);
+  });
+
   it('reads the brand’s numbers and its candidates for the owner', async () => {
     const facts = await read();
     expect(facts.failed).toEqual([]);

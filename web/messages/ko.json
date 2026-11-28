@@ -1260,6 +1260,9 @@
         "goal_reached": "목표 달성"
       },
       "pointsChange": "{value}점",
+      "notes": {
+        "no_revenue": "Google Analytics에서 보고된 수익이 없습니다. 전자상거래 추적이 필요합니다"
+      },
       "score": "{value}/100",
       "vsGoalAria": "목표의 {progress}%",
       "editKpis": "KPI 수정",
@@ -1335,6 +1338,7 @@
       "targetAria": "{name} 목표치",
       "invalidTarget": "목표값은 양수여야 하며, 퍼센트 및 점수 목표값은 100을 초과할 수 없습니다.",
       "scoreSuffix": "/100",
+      "needsGa": "Google Analytics 필요",
       "callout": {
         "title": "이 KPI 프레임워크가 액션 센터를 구동합니다.",
         "description": "조치 및 권장 사항은 KPI 목표를 기반으로 우선순위가 지정됩니다."
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "AI 추천 트래픽",
         "description": "AI 플랫폼에서 유입된 방문 수"
+      },
+      "ai_conversions": {
+        "name": "AI 전환",
+        "description": "AI 유입 세션의 주요 이벤트(Google Analytics)"
+      },
+      "ai_revenue": {
+        "name": "AI 수익",
+        "description": "AI 유입 세션의 수익(Google Analytics)"
       },
       "positive_sentiment": {
         "name": "긍정적 감성",

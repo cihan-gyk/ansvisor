@@ -1260,6 +1260,9 @@
         "goal_reached": "Meta atingida"
       },
       "pointsChange": "{value} pts",
+      "notes": {
+        "no_revenue": "O Google Analytics não relatou receita; é preciso ter rastreamento de e-commerce"
+      },
       "score": "{value}/100",
       "vsGoalAria": "{progress}% da meta",
       "editKpis": "Editar KPIs",
@@ -1335,6 +1338,7 @@
       "targetAria": "Objetivo para {name}",
       "invalidTarget": "As metas devem ser positivas; metas de porcentagem e de pontuação não podem exceder 100.",
       "scoreSuffix": "/100",
+      "needsGa": "Requer Google Analytics",
       "callout": {
         "title": "Esta estrutura de KPIs direcionará sua Central de ações.",
         "description": "Ações e recomendações são priorizadas com base nas suas metas de KPI."
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "Tráfego de referência de IA",
         "description": "Visitas provenientes de plataformas de IA"
+      },
+      "ai_conversions": {
+        "name": "Conversões de IA",
+        "description": "Eventos principais de sessões vindas de IA (Google Analytics)"
+      },
+      "ai_revenue": {
+        "name": "Receita de IA",
+        "description": "Receita de sessões vindas de IA (Google Analytics)"
       },
       "positive_sentiment": {
         "name": "Sentimento positivo",

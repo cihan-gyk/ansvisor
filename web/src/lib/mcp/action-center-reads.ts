@@ -73,7 +73,15 @@ export async function getActionCenterKpisFor(
       change_kind: kpi.changeKind,
       target: kpi.target,
       progress: kpi.progress,
-      status: kpi.status,
+      // AI Revenue without e-commerce tracking: no status, and why.
+      status: kpi.note ? null : kpi.status,
+      ...(kpi.note === 'no_revenue'
+        ? {
+            note: 'Google Analytics reported no revenue in this period or the one before: revenue needs e-commerce tracking, so this KPI is not measured against its target.',
+          }
+        : kpi.unit === 'currency'
+          ? { note: "In the Google Analytics property's own currency, not converted." }
+          : {}),
     })),
     // The KPIs read the brand's tracked answers: as of its last completed run.
     data_as_of: window.lastRunAt ?? null,

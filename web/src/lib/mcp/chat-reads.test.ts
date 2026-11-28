@@ -377,6 +377,43 @@ describe('Overview, KPIs and Getting started', () => {
     });
   });
 
+  it('says revenue is unconverted, and gives revenue GA never reported no status', async () => {
+    const revenue = {
+      key: 'ai_revenue',
+      category: 'traffic',
+      unit: 'currency',
+      direction: 'higher_is_better',
+      timeframe: 'monthly',
+      value: 0,
+      change: null,
+      changeKind: 'percent',
+      trend: [],
+      target: 1000,
+      progress: 0,
+      status: 'off_track',
+    };
+    mocks.getTrackingWindow.mockResolvedValue({ lastRunAt: null });
+    mocks.getKpiSnapshots.mockResolvedValue({
+      configured: true,
+      kpis: [{ ...revenue, value: 50, progress: 5 }],
+    });
+    const earned = await getActionCenterKpisFor(auth(), { brandId: BRAND });
+    expect(earned?.kpis[0]).toMatchObject({
+      status: 'off_track',
+      note: expect.stringContaining('not converted'),
+    });
+
+    mocks.getKpiSnapshots.mockResolvedValue({
+      configured: true,
+      kpis: [{ ...revenue, note: 'no_revenue' }],
+    });
+    const none = await getActionCenterKpisFor(auth(), { brandId: BRAND });
+    expect(none?.kpis[0]).toMatchObject({
+      status: null,
+      note: expect.stringContaining('e-commerce'),
+    });
+  });
+
   it("reads the KPIs page's snapshots and Getting started's steps", async () => {
     mocks.getKpiSnapshots.mockResolvedValue({
       configured: true,

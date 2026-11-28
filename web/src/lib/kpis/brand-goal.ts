@@ -11,5 +11,9 @@ export function brandGoalText(kpiKey: string, target: number): string {
   if (isKpiKey(kpiKey) && KPI_REGISTRY[kpiKey].unit === 'percent') {
     return `${Math.round(target * 10) / 10}%`;
   }
+  // Money whole, with no symbol: the GA property's currency isn't stored.
+  if (isKpiKey(kpiKey) && KPI_REGISTRY[kpiKey].unit === 'currency') {
+    return formatCompactNumber(Math.round(target));
+  }
   return formatCompactNumber(target);
 }

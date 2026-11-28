@@ -18,7 +18,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { dbClient } from '@/lib/supabase/scoped';
 import {
-  DEFAULT_KPI_SET,
+  KPI_KEYS,
   KPI_REGISTRY,
   TIMEFRAME_DAYS,
   isKpiKey,
@@ -37,7 +37,7 @@ import {
 } from '@/lib/kpis/status';
 import { presetKpiKeys, presetTarget } from '@/lib/kpis/presets';
 import { getInsightsSummary, getShareOfVoiceData, getVisibilityRateTrend } from './tracking';
-import { getTrafficSummary, getTrafficTrend } from './traffic';
+import { getTrafficGoogleTotals, getTrafficSummary, getTrafficTrend } from './traffic';
 import { assertWritable } from '@/lib/subscription-guard';
 
 const TREND_DAYS = 7;
@@ -68,6 +68,13 @@ export interface KpiSnapshot {
   /** value vs target as a percentage; may exceed 100. */
   progress: number;
   status: KpiStatus;
+  /**
+   * Set when the value can't be held against its goal: `no_revenue` for AI
+   * Revenue when Google Analytics reported none in this window or the one
+   * before (no e-commerce tracking). The row shows the note instead of a
+   * status, and readers must not count it as off track.
+   */
+  note?: 'no_revenue';
 }
 
 export interface KpiSnapshotsResult {
@@ -104,6 +111,20 @@ function percentChange(current: number, previous: number | null): number | null 
   return Math.round(((current - previous) / previous) * 1000) / 10;
 }
 
+function addDays(day: string, n: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
+}
+
+/** Whole days to window bounds, as the traffic reads take them. */
+function dayBounds(dayFrom: string, dayTo: string) {
+  return { dateFrom: `${dayFrom}T00:00:00.000Z`, dateTo: `${dayTo}T23:59:59.999Z` };
+}
+
+/** Money to the cent, so float sums don't show as 1234.5600000001. */
+function cents(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function sumTrafficPoint(point: Record<string, unknown>): number {
   let sum = 0;
   for (const [key, val] of Object.entries(point)) {
@@ -129,8 +150,9 @@ async function fetchWindowMetrics(
 
   const wantsInsights =
     keys.has('citations') || keys.has('mentions') || keys.has('positive_sentiment');
+  const wantsGa = keys.has('ai_conversions') || keys.has('ai_revenue');
 
-  const [visibility, insights, sov, traffic, trafficTrend, dailyTotals] = await Promise.all([
+  const [visibility, insights, sov, traffic, trafficTrend, dailyTotals, ga] = await Promise.all([
     keys.has('ai_visibility') ? getVisibilityRateTrend(brandId, { days }) : null,
     wantsInsights ? getInsightsSummary(brandId, { days }) : null,
     keys.has('share_of_voice') ? getShareOfVoiceData(brandId, { days }) : null,
@@ -151,9 +173,46 @@ async function fetchWindowMetrics(
     // a rollup read returning one JSON row; the KPIs read from the answers'
     // rollups (mentions, citations, positive sentiment) share the same seven.
     wantsInsights ? fetchDailyInsightTotals(brandId) : null,
+    wantsGa ? fetchGaTotals(brandId, days) : null,
   ]);
 
-  return { visibility, insights, sov, traffic, trafficTrend, dailyTotals };
+  return { visibility, insights, sov, traffic, trafficTrend, dailyTotals, ga };
+}
+
+/**
+ * AI Conversions and AI Revenue, from the AI Traffic page's Google Analytics
+ * totals (ga_traffic_totals): the window, the equal-length window before it,
+ * and — as there is no daily-series read — the 7-point sparkline as seven
+ * one-day totals in parallel, the way mentions and citations build theirs.
+ * Null for a brand without a GA property mapped: the KPIs are then skipped,
+ * not read as 0.
+ */
+async function fetchGaTotals(brandId: string, days: KpiWindow) {
+  const supabase = await dbClient();
+  const { data: brand, error } = await supabase
+    .from('brands')
+    .select('ga_property_id')
+    .eq('id', brandId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!brand?.ga_property_id) return null;
+
+  const read = async (dayFrom: string, dayTo: string) => {
+    const { ga } = await getTrafficGoogleTotals(brandId, dayBounds(dayFrom, dayTo), {
+      ga: true,
+      gsc: false,
+      gscLatestDays: null,
+    });
+    return { keyEvents: ga?.aiKeyEvents ?? 0, revenue: cents(ga?.aiRevenue ?? 0) };
+  };
+  const length = Math.round((Date.parse(days.dayTo) - Date.parse(days.dayFrom)) / DAY_MS) + 1;
+  const trendDays = Array.from({ length: TREND_DAYS }, (_, i) => daysAgo(TREND_DAYS - 1 - i));
+  const [current, previous, daily] = await Promise.all([
+    read(days.dayFrom, days.dayTo),
+    read(addDays(days.dayFrom, -length), addDays(days.dayFrom, -1)),
+    Promise.all(trendDays.map(async (day) => ({ date: day, ...(await read(day, day)) }))),
+  ]);
+  return { current, previous, daily };
 }
 
 async function fetchDailyInsightTotals(brandId: string) {
@@ -204,6 +263,7 @@ function buildSnapshot(
   let change: number | null;
   let changeKind: 'points' | 'percent';
   let trend: KpiTrendPoint[];
+  let note: KpiSnapshot['note'];
 
   switch (def.kpiKey) {
     case 'ai_visibility': {
@@ -268,6 +328,27 @@ function buildSnapshot(
         .map((p) => ({ date: p.date, value: sumTrafficPoint(p) }));
       break;
     }
+    case 'ai_conversions': {
+      if (!metrics.ga) return null;
+      const { current, previous, daily } = metrics.ga;
+      value = current.keyEvents;
+      change = percentChange(current.keyEvents, previous.keyEvents);
+      changeKind = 'percent';
+      trend = daily.map((d) => ({ date: d.date, value: d.keyEvents }));
+      break;
+    }
+    case 'ai_revenue': {
+      if (!metrics.ga) return null;
+      const { current, previous, daily } = metrics.ga;
+      value = current.revenue;
+      change = percentChange(current.revenue, previous.revenue);
+      changeKind = 'percent';
+      trend = daily.map((d) => ({ date: d.date, value: d.revenue }));
+      // Revenue needs e-commerce tracking; a property without it reports
+      // none, which says nothing about the goal.
+      if (current.revenue === 0 && previous.revenue === 0) note = 'no_revenue';
+      break;
+    }
   }
 
   // With an explicit window, the goal is held against that window's slice
@@ -290,6 +371,7 @@ function buildSnapshot(
     target,
     progress,
     status: deriveKpiStatus({ progress, change, direction: meta.direction }),
+    ...(note ? { note } : {}),
   };
 }
 
@@ -371,7 +453,7 @@ export async function getKpiSnapshots(
 
   // Registry order, so the table reads the same on every load regardless of
   // which timeframe group resolved first.
-  const order = new Map(DEFAULT_KPI_SET.map((k, i) => [k, i]));
+  const order = new Map(KPI_KEYS.map((k, i) => [k, i]));
   snapshots.sort((a, b) => (order.get(a.key) ?? 99) - (order.get(b.key) ?? 99));
   return { configured: true, kpis: snapshots };
 }
@@ -563,7 +645,7 @@ export async function getKpiPresetPreview(
   const shown = sameDays
     ? metrics
     : await fetchWindowMetrics(brandId, 'monthly', new Set(entries.map((e) => e.key)), window);
-  const order = new Map(DEFAULT_KPI_SET.map((k, i) => [k, i]));
+  const order = new Map(KPI_KEYS.map((k, i) => [k, i]));
   return entries
     .map((entry) =>
       buildSnapshot(

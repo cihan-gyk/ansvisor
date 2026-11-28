@@ -271,7 +271,11 @@ async function readNewSignals(
 /** The brand's KPIs and their status, read as Chat's get_action_center_kpis does. */
 async function readKpis(brandId: string): Promise<OperatorFacts['kpis']> {
   const snapshots = await asService(() => getKpiSnapshots(brandId));
-  return snapshots.kpis.map((kpi) => ({ key: kpi.key, status: kpi.status }));
+  // A KPI with a note (AI Revenue without e-commerce tracking) has no
+  // status to act on: it is left out rather than read as off track.
+  return snapshots.kpis
+    .filter((kpi) => !kpi.note)
+    .map((kpi) => ({ key: kpi.key, status: kpi.status }));
 }
 
 /** The month's AI use: a share used and when the period ends; self-hosted is unlimited. */

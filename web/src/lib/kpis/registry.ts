@@ -17,6 +17,8 @@ export type KpiKey =
   | 'mentions'
   | 'share_of_voice'
   | 'ai_referral_traffic'
+  | 'ai_conversions'
+  | 'ai_revenue'
   | 'positive_sentiment';
 
 export type KpiCategory = 'visibility' | 'citations' | 'mentions' | 'traffic' | 'content';
@@ -24,9 +26,12 @@ export type KpiCategory = 'visibility' | 'citations' | 'mentions' | 'traffic' | 
 /**
  * A KPI's unit. `points` is the Visibility score, 0–100: a score, shown as
  * "29.9/100" and never with a % (AC-02, D2), since a % reads as a share of
- * prompts. Percent and points are levels; counts and sessions are flows.
+ * prompts. `currency` is money in the Google Analytics property's own
+ * currency, shown as a whole number without a symbol: the property's
+ * currency code isn't stored, and nothing is converted. Percent and points
+ * are levels; counts, sessions and currency are flows.
  */
-export type KpiUnit = 'percent' | 'points' | 'count' | 'sessions';
+export type KpiUnit = 'percent' | 'points' | 'count' | 'sessions' | 'currency';
 
 /** Levels hold over any window and top out at 100; flows add up over time. */
 export const isLevelUnit = (unit: KpiUnit): boolean => unit === 'percent' || unit === 'points';
@@ -96,6 +101,26 @@ export const KPI_REGISTRY: Record<KpiKey, KpiMeta> = {
     source: 'tracking',
     defaultTarget: 100,
   },
+  // Key events (GA4's conversions) in AI-referred sessions, and their purchase
+  // revenue, from the Google Analytics sync (ga_traffic_totals). Both are
+  // read only for a brand with a GA property mapped; without one the KPI is
+  // skipped rather than read as 0.
+  ai_conversions: {
+    key: 'ai_conversions',
+    category: 'traffic',
+    unit: 'count',
+    direction: 'higher_is_better',
+    source: 'ga',
+    defaultTarget: 20,
+  },
+  ai_revenue: {
+    key: 'ai_revenue',
+    category: 'traffic',
+    unit: 'currency',
+    direction: 'higher_is_better',
+    source: 'ga',
+    defaultTarget: 1000,
+  },
   // The positive share of the answers naming the brand, as Insights'
   // Positive sentiment card: sentiment is read over mentions, so it files
   // under them.
@@ -116,8 +141,10 @@ export function isKpiKey(value: string): value is KpiKey {
 }
 
 /**
- * The default framework: the core AI-search set. Doubles as the canonical
- * display order for KPI rows.
+ * The default framework: the core AI-search set. AI Conversions and AI
+ * Revenue are not in it: they need Google Analytics (and revenue, e-commerce
+ * tracking), so a brand adds them itself. KPI rows are shown in registry
+ * order (KPI_KEYS), which puts them next to AI Referral Traffic.
  */
 export const DEFAULT_KPI_SET: KpiKey[] = [
   'ai_visibility',

@@ -164,7 +164,8 @@ function KpisContent({ brand }: { brand: Brand }) {
   const visible = kpis.filter(
     (k) =>
       (category === 'all' || k.category === category) &&
-      (statusFilter.size === 0 || statusFilter.has(k.status)),
+      // A row with a note (AI Revenue without e-commerce) has no status to match.
+      (statusFilter.size === 0 || (!k.note && statusFilter.has(k.status))),
   );
 
   const toggleStatus = (status: KpiStatus) => {

@@ -1260,6 +1260,9 @@
         "goal_reached": "Objetivo alcanzado"
       },
       "pointsChange": "{value} pts",
+      "notes": {
+        "no_revenue": "Google Analytics no registra ingresos; se necesita seguimiento de comercio electrónico"
+      },
       "score": "{value}/100",
       "vsGoalAria": "{progress} % del objetivo",
       "editKpis": "Editar KPI",
@@ -1335,6 +1338,7 @@
       "targetAria": "Objetivo para {name}",
       "invalidTarget": "Los objetivos deben ser positivos; los objetivos de porcentaje y puntuación no pueden superar 100.",
       "scoreSuffix": "/100",
+      "needsGa": "Requiere Google Analytics",
       "callout": {
         "title": "Este marco de KPI impulsará su Centro de acciones.",
         "description": "Las acciones y recomendaciones se priorizan en función de sus objetivos de KPI."
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "Tráfico de referencia de IA",
         "description": "Visitas procedentes de plataformas de IA"
+      },
+      "ai_conversions": {
+        "name": "Conversiones de IA",
+        "description": "Eventos clave de sesiones referidas por IA (Google Analytics)"
+      },
+      "ai_revenue": {
+        "name": "Ingresos de IA",
+        "description": "Ingresos de sesiones referidas por IA (Google Analytics)"
       },
       "positive_sentiment": {
         "name": "Sentimiento positivo",

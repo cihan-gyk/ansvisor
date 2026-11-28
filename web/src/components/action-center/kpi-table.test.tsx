@@ -55,4 +55,44 @@ describe('KpiTable', () => {
     expect(value).toBe('12.5%');
     expect(goal).toBe('20%');
   });
+
+  it('shows revenue whole and compact, with no currency sign', () => {
+    const [, value, , , , goal] = cells(
+      snapshot({
+        key: 'ai_revenue',
+        category: 'traffic',
+        unit: 'currency',
+        value: 1234.56,
+        target: 999.6,
+        changeKind: 'percent',
+      }),
+    );
+    expect(value).toBe('1.2k');
+    expect(goal).toBe('1k');
+    const [, small] = cells(
+      snapshot({ key: 'ai_revenue', unit: 'currency', value: 80.5, changeKind: 'percent' }),
+    );
+    expect(small).toBe('81');
+  });
+
+  it('says revenue needs e-commerce tracking instead of a status or progress', () => {
+    const [, value, , , status, , vsGoal] = cells(
+      snapshot({
+        key: 'ai_revenue',
+        category: 'traffic',
+        unit: 'currency',
+        value: 0,
+        change: null,
+        changeKind: 'percent',
+        target: 1000,
+        progress: 0,
+        status: 'off_track',
+        note: 'no_revenue',
+      }),
+    );
+    expect(value).toBe('0');
+    expect(status).toBe(messages.actionCenter.kpis.notes.no_revenue);
+    expect(status).not.toContain('Off Track');
+    expect(vsGoal).toBe('—');
+  });
 });

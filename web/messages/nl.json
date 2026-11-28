@@ -1260,6 +1260,9 @@
         "goal_reached": "Doel bereikt"
       },
       "pointsChange": "{value} pt.",
+      "notes": {
+        "no_revenue": "Google Analytics rapporteert geen omzet; hiervoor is e-commercetracking nodig"
+      },
       "score": "{value}/100",
       "vsGoalAria": "{progress}% van doel",
       "editKpis": "KPI's bewerken",
@@ -1335,6 +1338,7 @@
       "targetAria": "Streefwaarde voor {name}",
       "invalidTarget": "Doelen moeten positief zijn; doelen in procenten en scores mogen niet hoger zijn dan 100.",
       "scoreSuffix": "/100",
+      "needsGa": "Vereist Google Analytics",
       "callout": {
         "title": "Dit KPI-framework stuurt uw Action Center aan.",
         "description": "Acties en aanbevelingen worden geprioriteerd op basis van uw KPI-doelen."
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "AI-verwijzingsverkeer",
         "description": "Bezoeken afkomstig van AI-platformen"
+      },
+      "ai_conversions": {
+        "name": "AI-conversies",
+        "description": "Belangrijke gebeurtenissen uit AI-verwezen sessies (Google Analytics)"
+      },
+      "ai_revenue": {
+        "name": "AI-omzet",
+        "description": "Omzet uit AI-verwezen sessies (Google Analytics)"
       },
       "positive_sentiment": {
         "name": "Positief sentiment",

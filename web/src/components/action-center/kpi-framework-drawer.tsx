@@ -63,10 +63,12 @@ const TEMPLATE_ORDER: KpiTemplateKey[] = [
 
 const TIMEFRAMES: KpiTimeframe[] = ['weekly', 'monthly', 'quarterly'];
 
+// Money has no suffix: the GA property's currency isn't stored, so none is guessed.
 const UNIT_SUFFIX: Record<string, string> = {
   percent: '%',
   count: '#',
   sessions: '#',
+  currency: '',
 };
 
 interface DraftEntry {
@@ -344,9 +346,15 @@ export function KpiFrameworkDrawer({
                       />
                       <Label
                         htmlFor={`kpi-enable-${key}`}
-                        className="min-w-0 flex-1 truncate text-sm font-normal"
+                        className="min-w-0 flex-1 flex-col items-start gap-1 text-sm font-normal"
                       >
-                        {tRegistry(`${key}.name`)}
+                        <span className="w-full truncate">{tRegistry(`${key}.name`)}</span>
+                        {/* Read from Google Analytics alone: without it the KPI isn't shown. */}
+                        {KPI_REGISTRY[key].source === 'ga' && (
+                          <span className="w-full truncate text-xs text-muted-foreground">
+                            {t('needsGa')}
+                          </span>
+                        )}
                       </Label>
                       <div className="relative w-28">
                         <Input

@@ -1260,6 +1260,9 @@
         "goal_reached": "目標達成"
       },
       "pointsChange": "{value} pt",
+      "notes": {
+        "no_revenue": "Google Analyticsで収益がレポートされていません。eコマース測定が必要です"
+      },
       "score": "{value}/100",
       "vsGoalAria": "目標の{progress}%",
       "editKpis": "KPIを編集",
@@ -1335,6 +1338,7 @@
       "targetAria": "{name}の目標値",
       "invalidTarget": "目標値は正の数にしてください。パーセントとスコアの目標値は100を超えられません。",
       "scoreSuffix": "/100",
+      "needsGa": "Google Analyticsが必要",
       "callout": {
         "title": "このKPIフレームワークに基づいてアクションセンターが運用されます。",
         "description": "アクションや提案は、KPI目標に基づいて優先順位が付けられます。"
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "AI参照トラフィック",
         "description": "AIプラットフォームからの訪問数"
+      },
+      "ai_conversions": {
+        "name": "AIコンバージョン",
+        "description": "AI経由のセッションでのキーイベント（Google Analytics）"
+      },
+      "ai_revenue": {
+        "name": "AI収益",
+        "description": "AI経由のセッションからの収益（Google Analytics）"
       },
       "positive_sentiment": {
         "name": "ポジティブセンチメント",

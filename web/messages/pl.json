@@ -1260,6 +1260,9 @@
         "goal_reached": "Cel osiągnięty"
       },
       "pointsChange": "{value} pkt",
+      "notes": {
+        "no_revenue": "Google Analytics nie raportuje przychodu; wymaga to śledzenia e-commerce"
+      },
       "score": "{value}/100",
       "vsGoalAria": "{progress}% celu",
       "editKpis": "Edytuj wskaźniki KPI",
@@ -1335,6 +1338,7 @@
       "targetAria": "Wartość docelowa dla {name}",
       "invalidTarget": "Cele muszą być dodatnie; cele procentowe i punktowe nie mogą przekraczać 100.",
       "scoreSuffix": "/100",
+      "needsGa": "Wymaga Google Analytics",
       "callout": {
         "title": "Ta struktura KPI będzie zasilać Twoje Centrum działań.",
         "description": "Działania i rekomendacje są priorytetyzowane na podstawie Twoich celów KPI."
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "Ruch polecający z AI",
         "description": "Wizyty pochodzące z platform AI"
+      },
+      "ai_conversions": {
+        "name": "Konwersje z AI",
+        "description": "Kluczowe zdarzenia z sesji poleconych przez AI (Google Analytics)"
+      },
+      "ai_revenue": {
+        "name": "Przychód z AI",
+        "description": "Przychód z sesji poleconych przez AI (Google Analytics)"
       },
       "positive_sentiment": {
         "name": "Pozytywny sentyment",

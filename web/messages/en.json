@@ -1260,6 +1260,9 @@
         "goal_reached": "Goal Reached"
       },
       "pointsChange": "{value} pts",
+      "notes": {
+        "no_revenue": "No revenue reported by Google Analytics; it needs e-commerce tracking"
+      },
       "score": "{value}/100",
       "vsGoalAria": "{progress}% of goal",
       "editKpis": "Edit KPIs",
@@ -1335,6 +1338,7 @@
       "targetAria": "Target for {name}",
       "invalidTarget": "Targets must be positive; percent and score targets can't exceed 100.",
       "scoreSuffix": "/100",
+      "needsGa": "Needs Google Analytics",
       "callout": {
         "title": "This KPI framework will drive your Action Center.",
         "description": "Actions and recommendations are prioritized based on your KPI goals."
@@ -1365,6 +1369,14 @@
       "ai_referral_traffic": {
         "name": "AI Referral Traffic",
         "description": "Visits arriving from AI platforms"
+      },
+      "ai_conversions": {
+        "name": "AI Conversions",
+        "description": "Key events from AI-referred sessions (Google Analytics)"
+      },
+      "ai_revenue": {
+        "name": "AI Revenue",
+        "description": "Revenue from AI-referred sessions (Google Analytics)"
       },
       "positive_sentiment": {
         "name": "Positive Sentiment",

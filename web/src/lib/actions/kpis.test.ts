@@ -54,9 +54,11 @@ vi.mock('./tracking', () => ({
 }));
 const getTrafficSummary = vi.fn();
 const getTrafficTrend = vi.fn();
+const getTrafficGoogleTotals = vi.fn();
 vi.mock('./traffic', () => ({
   getTrafficSummary: (...args: unknown[]) => getTrafficSummary(...args),
   getTrafficTrend: (...args: unknown[]) => getTrafficTrend(...args),
+  getTrafficGoogleTotals: (...args: unknown[]) => getTrafficGoogleTotals(...args),
 }));
 
 const { getKpiPresetPreview, getKpiSnapshots, seedKpiPresets } = await import('./kpis');
@@ -78,6 +80,7 @@ beforeEach(() => {
     getVisibilityRateTrend,
     getTrafficSummary,
     getTrafficTrend,
+    getTrafficGoogleTotals,
   ]) {
     fn.mockReset();
   }
@@ -268,5 +271,144 @@ describe('the ready-made KPIs', () => {
     // Another window reads its own figures; the targets stay the 30 days'.
     await getKpiPresetPreview('b1', { dayFrom: daysAgo(6), dayTo: today });
     expect(getInsightsSummary).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('AI Conversions and AI Revenue', () => {
+  const today = new Date().toISOString().slice(0, 10);
+  /** GA4 totals by window, keyed "from..to" (whole UTC days). */
+  let gaTotals: Record<string, { aiKeyEvents: number; aiRevenue: number }> = {};
+  const range = (from: string, to: string) => `${from}..${to}`;
+
+  beforeEach(() => {
+    gaTotals = {};
+    getTrafficGoogleTotals.mockImplementation(
+      async (_brand: string, window: { dateFrom: string; dateTo: string }) => {
+        const key = range(window.dateFrom.slice(0, 10), window.dateTo.slice(0, 10));
+        const row = gaTotals[key] ?? { aiKeyEvents: 0, aiRevenue: 0 };
+        return { ga: { ...row, sessions: 0, aiSessions: 0 }, gsc: null };
+      },
+    );
+  });
+
+  const define = (...keys: string[]) => {
+    definitions = keys.map((kpi_key) => ({
+      kpi_key,
+      target: kpi_key === 'ai_revenue' ? 1000 : 20,
+      timeframe: 'monthly',
+      is_active: true,
+    }));
+  };
+
+  it('are Google Analytics KPIs next to AI Referral Traffic, outside the default set', () => {
+    expect(KPI_REGISTRY.ai_conversions).toMatchObject({
+      category: 'traffic',
+      unit: 'count',
+      direction: 'higher_is_better',
+      source: 'ga',
+      defaultTarget: 20,
+    });
+    expect(KPI_REGISTRY.ai_revenue).toMatchObject({
+      category: 'traffic',
+      unit: 'currency',
+      direction: 'higher_is_better',
+      source: 'ga',
+    });
+    const at = KPI_KEYS.indexOf('ai_referral_traffic');
+    expect(KPI_KEYS.slice(at, at + 3)).toEqual([
+      'ai_referral_traffic',
+      'ai_conversions',
+      'ai_revenue',
+    ]);
+    expect(DEFAULT_KPI_SET).not.toContain('ai_conversions');
+    expect(DEFAULT_KPI_SET).not.toContain('ai_revenue');
+    for (const keys of Object.values(KPI_TEMPLATES)) {
+      expect(keys).not.toContain('ai_conversions');
+      expect(keys).not.toContain('ai_revenue');
+    }
+  });
+
+  it('read key events and revenue from ga_traffic_totals: window, the one before and seven days', async () => {
+    brandRow = { ga_property_id: 'properties/123' };
+    define('ai_revenue', 'ai_conversions');
+    gaTotals = {
+      [range(daysAgo(29), today)]: { aiKeyEvents: 15, aiRevenue: 1234.5600000001 },
+      [range(daysAgo(59), daysAgo(30))]: { aiKeyEvents: 10, aiRevenue: 1000 },
+      [range(daysAgo(6), daysAgo(6))]: { aiKeyEvents: 2, aiRevenue: 80.5 },
+      [range(today, today)]: { aiKeyEvents: 1, aiRevenue: 20 },
+    };
+
+    const { kpis } = await getKpiSnapshots('b1');
+
+    // Registry order, whatever order they were defined in.
+    expect(kpis.map((k) => k.key)).toEqual(['ai_conversions', 'ai_revenue']);
+    expect(kpis[0]).toMatchObject({
+      unit: 'count',
+      value: 15,
+      change: 50,
+      changeKind: 'percent',
+      target: 20,
+      progress: 75,
+    });
+    expect(kpis[1]).toMatchObject({
+      unit: 'currency',
+      value: 1234.56,
+      change: 23.5,
+      changeKind: 'percent',
+      target: 1000,
+      progress: 123,
+      status: 'goal_reached',
+    });
+    expect(kpis[1].note).toBeUndefined();
+    expect(kpis[0].trend).toHaveLength(7);
+    expect(kpis[0].trend[0]).toEqual({ date: daysAgo(6), value: 2 });
+    expect(kpis[0].trend[1]).toEqual({ date: daysAgo(5), value: 0 });
+    expect(kpis[1].trend.at(-1)).toEqual({ date: today, value: 20 });
+    // Window + previous window + 7 days, shared by both KPIs, GA only.
+    expect(getTrafficGoogleTotals).toHaveBeenCalledTimes(9);
+    for (const call of getTrafficGoogleTotals.mock.calls) {
+      expect(call[2]).toEqual({ ga: true, gsc: false, gscLatestDays: null });
+    }
+  });
+
+  it('compare the previous window of the same length when a range is picked', async () => {
+    brandRow = { ga_property_id: 'properties/123' };
+    define('ai_conversions');
+    gaTotals = {
+      [range(daysAgo(6), today)]: { aiKeyEvents: 6, aiRevenue: 0 },
+      [range(daysAgo(13), daysAgo(7))]: { aiKeyEvents: 8, aiRevenue: 0 },
+    };
+    const { kpis } = await getKpiSnapshots('b1', { dayFrom: daysAgo(6), dayTo: today });
+    // A monthly 20 held against the week's slice.
+    expect(kpis[0]).toMatchObject({ value: 6, change: -25, target: 5 });
+  });
+
+  it('are skipped, not read as 0, for a brand without Google Analytics', async () => {
+    brandRow = { ga_property_id: null };
+    define('ai_conversions', 'ai_revenue');
+    const { configured, kpis } = await getKpiSnapshots('b1');
+    expect(configured).toBe(true);
+    expect(kpis).toEqual([]);
+    expect(getTrafficGoogleTotals).not.toHaveBeenCalled();
+  });
+
+  it('notes revenue that Google Analytics never reported instead of failing its goal', async () => {
+    brandRow = { ga_property_id: 'properties/123' };
+    define('ai_revenue', 'ai_conversions');
+    gaTotals = { [range(daysAgo(29), today)]: { aiKeyEvents: 4, aiRevenue: 0 } };
+    const { kpis } = await getKpiSnapshots('b1');
+    const revenue = kpis.find((k) => k.key === 'ai_revenue');
+    expect(revenue).toMatchObject({ value: 0, change: null, note: 'no_revenue' });
+    // Conversions carry on as usual.
+    expect(kpis.find((k) => k.key === 'ai_conversions')?.note).toBeUndefined();
+  });
+
+  it('shows revenue that starts this window with no change and no note', async () => {
+    brandRow = { ga_property_id: 'properties/123' };
+    define('ai_revenue');
+    gaTotals = { [range(daysAgo(29), today)]: { aiKeyEvents: 0, aiRevenue: 50 } };
+    const { kpis } = await getKpiSnapshots('b1');
+    expect(kpis[0]).toMatchObject({ value: 50, change: null });
+    expect(kpis[0].note).toBeUndefined();
   });
 });
