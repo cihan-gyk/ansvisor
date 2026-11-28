@@ -108,7 +108,14 @@ describe('parsePriorityReason', () => {
 describe('confidence', () => {
   it('reads the factor as a level and says why, never the bare number', () => {
     const one = parsePriorityReason({ kinds: 1, sources: 1, factors: { confidence: 0.3 } });
-    expect(one?.confidence).toEqual({ level: 'low', score: 0.3, kinds: 1, sources: 1 });
+    expect(one?.confidence).toEqual({
+      level: 'low',
+      score: 0.3,
+      kinds: 1,
+      sources: 1,
+      nights: null,
+      breadth: null,
+    });
     expect(priorityConfidenceText(one!.confidence!, t)).toBe(
       'Single source — one kind of finding from one source.',
     );
@@ -128,6 +135,63 @@ describe('confidence', () => {
       'Confirmed — rated from what it was sent with, not from detected findings.',
     );
     expect(parsePriorityReason({ factors: { impact: 1 } })?.confidence).toBeNull();
+  });
+
+  it('says how many nights in a row and across how many prompts, when kept', () => {
+    const held = parsePriorityReason({
+      kinds: 1,
+      sources: 1,
+      nights: 9,
+      breadth: 12,
+      factors: { confidence: 0.6 },
+    });
+    expect(held?.confidence).toMatchObject({ level: 'medium', nights: 9, breadth: 12 });
+    expect(priorityConfidenceText(held!.confidence!, t)).toBe(
+      'Confirmed — one kind of finding from one source, seen on 9 nights in a row across 12 prompts.',
+    );
+    expect(confidenceNote(held!.confidence!)).toBe(
+      'one kind of finding from one source, seen on 9 nights in a row across 12 prompts',
+    );
+
+    // Either alone; one night or one prompt adds nothing to say.
+    const nights = parsePriorityReason({
+      kinds: 1,
+      sources: 1,
+      nights: 4,
+      breadth: 1,
+      factors: { confidence: 0.4 },
+    });
+    expect(priorityConfidenceText(nights!.confidence!, t)).toBe(
+      'Single source — one kind of finding from one source, seen on 4 nights in a row.',
+    );
+    expect(confidenceNote(nights!.confidence!)).toBe(
+      'one kind of finding from one source, seen on 4 nights in a row',
+    );
+    const wide = parsePriorityReason({
+      kinds: 1,
+      sources: 1,
+      nights: 1,
+      breadth: 6,
+      factors: { confidence: 0.4 },
+    });
+    expect(priorityConfidenceText(wide!.confidence!, t)).toBe(
+      'Single source — one kind of finding from one source across 6 prompts.',
+    );
+  });
+
+  it('reads a reason without nights or breadth, or with odd values, as before', () => {
+    for (const extra of [{}, { nights: null, breadth: null }, { nights: 'x', breadth: -2 }]) {
+      const old = parsePriorityReason({
+        kinds: 1,
+        sources: 1,
+        ...extra,
+        factors: { confidence: 0.3 },
+      });
+      expect(old?.confidence).toMatchObject({ nights: null, breadth: null });
+      expect(priorityConfidenceText(old!.confidence!, t)).toBe(
+        'Single source — one kind of finding from one source.',
+      );
+    }
   });
 
   it('is High from 0.7 and Medium from 0.5', () => {

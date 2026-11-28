@@ -2238,6 +2238,7 @@
             "medium": "確認済み",
             "high": "十分に確認済み",
             "found": "{sources, plural, =0 {{kinds, plural, other {#種類の検出事項}}} other {{sources, plural, other {#件の情報源}}から{kinds, plural, other {#種類の検出事項}}}}",
+            "held": "{prompts, plural, =0 {} other {#件のPromptsで}}{nights, plural, =0 {} other {#夜連続で}}確認された{found}",
             "sent": "検出された事項ではなく、送信された内容から評価されました"
           },
           "sentence": {

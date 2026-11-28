@@ -2238,6 +2238,7 @@
             "medium": "Confirmed",
             "high": "Well confirmed",
             "found": "{kinds, plural, one {one kind of finding} other {# kinds of finding}}{sources, plural, =0 {} one { from one source} other { from # sources}}",
+            "held": "{found}{nights, plural, =0 {} one {, seen on # night} other {, seen on # nights in a row}}{prompts, plural, =0 {} one { on # prompt} other { across # prompts}}",
             "sent": "rated from what it was sent with, not from detected findings"
           },
           "sentence": {

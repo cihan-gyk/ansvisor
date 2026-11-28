@@ -2238,6 +2238,7 @@
             "medium": "Doğrulandı",
             "high": "Güçlü şekilde doğrulandı",
             "found": "{sources, plural, =0 {} other {# kaynaktan }}{kinds, plural, other {# tür bulgu}}",
+            "held": "{prompts, plural, =0 {} other {# Prompt'ta }}{nights, plural, =0 {} other {# gece üst üste }}görülen {found}",
             "sent": "tespit edilen bulgulardan değil, birlikte gönderildiği verilerden değerlendirildi"
           },
           "sentence": {

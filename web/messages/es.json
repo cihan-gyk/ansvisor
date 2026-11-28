@@ -2238,6 +2238,7 @@
             "medium": "Confirmado",
             "high": "Bien confirmado",
             "found": "{kinds, plural, one {un tipo de hallazgo} other {# tipos de hallazgo}}{sources, plural, =0 {} one { de una fuente} other { de # fuentes}}",
+            "held": "{found}{nights, plural, =0 {} one {, visto # noche} other {, visto # noches seguidas}}{prompts, plural, =0 {} one { en # Prompt} other { en # Prompts}}",
             "sent": "calificado a partir de con qué se envió, no de hallazgos detectados"
           },
           "sentence": {

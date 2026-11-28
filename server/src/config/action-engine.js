@@ -391,6 +391,31 @@ export const ENGINE_THRESHOLDS = Object.freeze({
     realDemandHigh: 0.85,
     realDemandMedium: 0.55,
     businessValueUnknown: 0.5,
+    /**
+     * Confidence (priority.js `confidenceOf`) starts at 0.3 for one kind of
+     * finding from one source and gains 0.2 for each further kind and each
+     * further source. Two more terms count evidence the findings already
+     * carry, without a second source:
+     *
+     *   * **Persistence.** A signal is one ongoing condition, re-detected
+     *     night after night. Seen on `confidenceNightsSome` nights or more
+     *     (its longest-running signal), it gains `confidencePersistSome`; on
+     *     `confidenceNightsMany` or more, `confidencePersistMany` instead. A
+     *     condition that holds for a week is less likely to be one night's
+     *     noise.
+     *   * **Breadth.** Across `confidenceBreadthPrompts` prompts or more, it
+     *     gains `confidenceBreadthBonus`: the same finding on many prompts is
+     *     less likely to be one answer's quirk.
+     *
+     * Up to 1 in all. One kind from one source, seen for a week on five
+     * prompts, reaches 0.6: Confirmed.
+     */
+    confidenceNightsSome: 3,
+    confidencePersistSome: 0.1,
+    confidenceNightsMany: 7,
+    confidencePersistMany: 0.2,
+    confidenceBreadthPrompts: 5,
+    confidenceBreadthBonus: 0.1,
     /** Days for a finding's recency to halve. */
     recencyHalfLifeDays: 10,
     /** Levels: critical at 90 and above, high at 75, medium at 50, low below. */

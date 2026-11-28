@@ -2,7 +2,7 @@
 
 import { useTranslations } from 'next-intl';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import type { PriorityConfidence } from '@/lib/action-center/priority';
+import { confidenceFoundText, type PriorityConfidence } from '@/lib/action-center/priority';
 
 /**
  * "Single source" beside an action's priority (AC-26): the score says how
@@ -18,12 +18,7 @@ export function LowConfidenceTag({ confidence }: { confidence?: PriorityConfiden
   if (confidence?.level !== 'low') return null;
   const tip =
     confidence.kinds > 0
-      ? t('lowConfidence.tip', {
-          why: t('reason.confidence.found', {
-            kinds: confidence.kinds,
-            sources: confidence.sources,
-          }),
-        })
+      ? t('lowConfidence.tip', { why: confidenceFoundText(confidence, t) })
       : t('lowConfidence.sentTip');
   return (
     <Tooltip>

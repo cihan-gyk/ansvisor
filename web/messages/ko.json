@@ -2238,6 +2238,7 @@
             "medium": "확인됨",
             "high": "충분히 확인됨",
             "found": "{sources, plural, =0 {{kinds, plural, other {#가지 발견 유형}}} other {{sources, plural, other {#개 출처}}의 {kinds, plural, other {#가지 발견 유형}}}}",
+            "held": "{prompts, plural, =0 {} other {#개 Prompt에서 }}{nights, plural, =0 {} other {#일 연속 }}확인된 {found}",
             "sent": "감지된 발견 사항이 아닌 함께 전송된 항목을 바탕으로 평가됨"
           },
           "sentence": {

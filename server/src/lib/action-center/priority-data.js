@@ -183,7 +183,7 @@ const OPEN_SIGNAL_STATUSES = ['new', 'acknowledged'];
 export async function rescoreAction(action, now = new Date(), track = null) {
   const { data: signals, error } = await supabaseAdmin
     .from('signals')
-    .select('id, kind, impact, payload, current_value, source, detected_at')
+    .select('id, kind, impact, payload, current_value, source, detected_at, last_detected_at')
     .eq('action_id', action.id)
     .in('status', OPEN_SIGNAL_STATUSES)
     .limit(1000);
@@ -253,7 +253,9 @@ export async function rescoreBrandActions(
 
   const { data: signals, error: signalsErr } = await supabaseAdmin
     .from('signals')
-    .select('id, kind, impact, payload, current_value, source, detected_at, action_id')
+    .select(
+      'id, kind, impact, payload, current_value, source, detected_at, last_detected_at, action_id',
+    )
     .eq('brand_id', brandId)
     .in('status', OPEN_SIGNAL_STATUSES)
     .not('action_id', 'is', null)

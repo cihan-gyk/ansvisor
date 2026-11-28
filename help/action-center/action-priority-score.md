@@ -4,8 +4,8 @@ route: /dashboard/action-center/actions
 keywords: [priority score, priority level, critical, why this priority, action ranking, low confidence, single source, confirmed]
 synonyms: [action priority, ranking, how actions are sorted, urgency]
 plan: all
-updated: 2026-11-20
-last_checked: 2026-11-20
+updated: 2026-11-28
+last_checked: 2026-11-28
 owner: Cihan
 app_version: 0.3.0
 approved: true
@@ -26,7 +26,7 @@ Every action has a **Priority Score** from 0 to 100: how soon to work on it besi
 - **Demand**: how much its prompts, search queries or pages are searched or visited. Only the most demanded few count. A prompt's measured demand level raises it: High more, Medium a little.
 - **Severity**: a loss ranks above a sharp drop, a drop above a slip, and a slip above a gap or a site issue.
 - **Business value**: how commercial the searches are, or what a page is worth from Google Analytics.
-- **Confidence**: how many independent kinds of finding and data sources agree.
+- **Confidence**: how many independent kinds of finding and data sources agree, how many nights in a row a finding has been seen, and how many prompts it covers.
 - **Recoverability**: ground you held and lost is nearer at hand than ground you never held.
 - **Recency**: newer evidence counts more.
 
@@ -48,9 +48,9 @@ The action's **Overview** tab starts with **Why this priority?**: one sentence w
 
 ## Single source
 
-Confidence says how many kinds of evidence agree, not whether a finding is right. Most actions come from your tracked AI answers alone: one kind of finding from one source. They show a **Single source** tag next to the score in the **Actions** list and next to **Why this priority?** in the open action. Hover or focus it to see why.
+Confidence says how much evidence agrees, not whether a finding is right. Most actions come from your tracked AI answers alone: one kind of finding from one source. They show a **Single source** tag next to the score in the **Actions** list and next to **Why this priority?** in the open action. Hover or focus it to see why.
 
-A second kind of evidence, such as Google Analytics, Search Console or a site audit, makes it **Confirmed** or **Well confirmed**. Confidence is only one part of the score, so impact and demand still rank the action.
+A finding that keeps showing up raises confidence: seen on 3 nights in a row or more, and more again from 7. So does a finding across 5 prompts or more. Seen for a week, or on 3 nights across 5 prompts, it reads as **Confirmed**. A second kind of evidence, such as Google Analytics, Search Console or a site audit, also makes it **Confirmed** or **Well confirmed**. Confidence is only one part of the score, so impact and demand still rank the action.
 
 ## Not the Content Plan's score
 

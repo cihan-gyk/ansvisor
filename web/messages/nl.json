@@ -2238,6 +2238,7 @@
             "medium": "Bevestigd",
             "high": "Goed bevestigd",
             "found": "{kinds, plural, one {één type bevinding} other {# typen bevindingen}}{sources, plural, =0 {} one { uit één bron} other { uit # bronnen}}",
+            "held": "{found}{nights, plural, =0 {} one {, # nacht gezien} other {, # nachten op rij gezien}}{prompts, plural, =0 {} one { bij # Prompt} other { over # Prompts}}",
             "sent": "beoordeeld op basis van waarmee het is verzonden, niet op basis van gedetecteerde bevindingen"
           },
           "sentence": {

@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  confidenceOf,
+  nightsSeenOf,
   pastSuccessOf,
   priorityColumns,
   priorityLevel,
+  promptBreadthOf,
   promptIdsOf,
   scorePriority,
 } from './priority.js';
@@ -649,7 +652,8 @@ describe('scorePriority', () => {
       },
       NOW,
     );
-    expect(backed.score).toBe(83);
+    // 83 before its 7 prompts counted toward confidence (+0.1, one point).
+    expect(backed.score).toBe(84);
     expect(backed.reason.change).toBe('lost');
     expect(backed.reason).not.toHaveProperty('competitorGap');
   });
@@ -861,5 +865,111 @@ describe('priorityColumns', () => {
       priority_reason: { change: 'lost' },
       priority_updated_at: NOW.toISOString(),
     });
+  });
+});
+
+describe('confidence: persistence and breadth', () => {
+  // A signal first seen `first` days ago and seen again `last` days ago.
+  const seen = (first, last = 0, over = {}) =>
+    signal({ detected_at: daysAgo(first), last_detected_at: daysAgo(last), ...over });
+  const prompts = (n) => ({
+    entity: 'prompts',
+    targets: Array.from({ length: n }, (_, i) => ({ id: `p${i}` })),
+  });
+
+  it('counts the nights a finding was seen, the longest of its signals', () => {
+    expect(nightsSeenOf([seen(0)])).toBe(1);
+    expect(nightsSeenOf([seen(2)])).toBe(3);
+    expect(nightsSeenOf([seen(6), seen(1)])).toBe(7);
+    // A night's run a few minutes later than the first still counts whole.
+    const late = new Date(NOW.getTime() + 20 * 60_000).toISOString();
+    expect(nightsSeenOf([seen(6, 0, { last_detected_at: late })])).toBe(7);
+  });
+
+  it('adds 0.1 from 3 nights and 0.2 from 7, nothing on 1', () => {
+    expect(confidenceOf([seen(0)])).toMatchObject({ value: 0.3, nights: 1 });
+    expect(confidenceOf([seen(1)]).value).toBe(0.3);
+    expect(confidenceOf([seen(2)])).toMatchObject({ nights: 3 });
+    expect(confidenceOf([seen(2)]).value).toBeCloseTo(0.4);
+    expect(confidenceOf([seen(5)]).value).toBeCloseTo(0.4);
+    expect(confidenceOf([seen(6)])).toMatchObject({ nights: 7 });
+    expect(confidenceOf([seen(6)]).value).toBeCloseTo(0.5);
+  });
+
+  it('adds 0.1 at 5 prompts, not at 4', () => {
+    expect(confidenceOf([signal({ payload: prompts(4) })])).toMatchObject({
+      value: 0.3,
+      breadth: 4,
+    });
+    const five = confidenceOf([signal({ payload: prompts(5) })]);
+    expect(five.breadth).toBe(5);
+    expect(five.value).toBeCloseTo(0.4);
+  });
+
+  it("counts prompts across signals and the action's own count, once each", () => {
+    expect(
+      promptBreadthOf([
+        { promptId: 'a' },
+        { promptIds: ['a', 'b'] },
+        { entity: 'prompts', targets: [{ id: 'b' }, { id: 'c' }], targetIds: ['b', 'c', 'd'] },
+        // Pages aren't prompts.
+        { entity: 'pages', targets: [{ id: '/x' }] },
+      ]),
+    ).toBe(4);
+    // The action counts the whole group past the ids its payload lists.
+    expect(promptBreadthOf([{ promptId: 'a' }, { targetEntity: 'prompts', targetCount: 12 }])).toBe(
+      12,
+    );
+    expect(promptBreadthOf([{ entity: 'pages', targets: [{ id: '/x' }] }])).toBeNull();
+  });
+
+  it('reaches Confirmed from one kind and one source seen for a week on 12 prompts', () => {
+    const { reason } = scorePriority(
+      {
+        action: action({ payload: { targetEntity: 'prompts', targetCount: 12 } }),
+        signals: [seen(8, 0, { payload: { promptId: 'p1' } })],
+      },
+      NOW,
+    );
+    expect(reason).toMatchObject({ kinds: 1, sources: 1, nights: 9, breadth: 12 });
+    expect(reason.factors.confidence).toBe(0.6);
+  });
+
+  it('keeps the kinds and sources terms beside them, up to 1', () => {
+    const { reason } = scorePriority(
+      {
+        action: action(),
+        signals: [
+          seen(10, 0, { payload: prompts(6) }),
+          seen(1, 0, { kind: 'lost_mentions', source: ['gsc', 'ga4'] }),
+        ],
+      },
+      NOW,
+    );
+    expect(reason).toMatchObject({ kinds: 2, sources: 3, nights: 11, breadth: 6 });
+    expect(reason.factors.confidence).toBe(1);
+  });
+
+  it('reads a signal without last_detected_at as before: no nights, no bonus', () => {
+    const { reason } = scorePriority({ action: action(), signals: [signal()] }, NOW);
+    expect(reason).toMatchObject({ nights: null, breadth: null });
+    expect(reason.factors.confidence).toBe(0.3);
+  });
+
+  it('leaves an action a person sent with its own confidence, and no nights or breadth', () => {
+    const { reason } = scorePriority(
+      {
+        action: {
+          kind: 'content_opportunity',
+          category: 'growth',
+          impact: 'medium',
+          payload: { targetEntity: 'prompts', targetCount: 20 },
+        },
+        signals: [],
+      },
+      NOW,
+    );
+    expect(reason).toMatchObject({ kinds: 0, sources: 0, nights: null, breadth: null });
+    expect(reason.factors.confidence).toBe(0.6);
   });
 });

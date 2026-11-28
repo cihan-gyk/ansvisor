@@ -15,7 +15,8 @@
  *   business value  how commercial the searches are (intent), or what the
  *                   page is worth to the business;
  *   confidence      how many independent kinds and sources of evidence agree
- *                   — not how many signals repeat one finding;
+ *                   — not how many signals repeat one finding — and how
+ *                   long and how wide the finding has held;
  *   recoverability  whether the brand held this before and lost it, which is
  *                   nearer to hand than winning it from nothing;
  *   recency         how new the latest evidence is, halving every few days.
@@ -357,16 +358,83 @@ function demandAndValue(payloads, signals, prompts) {
 }
 
 /**
+ * The most nights any of these signals has been seen: a signal is one
+ * ongoing condition, first seen on `detected_at` and seen again on each
+ * night's `last_detected_at`, so its nights are the whole days between the
+ * two, plus one. Rounded, as a night's run doesn't start at the same minute.
+ * Null when no signal carries both dates (one read before they were loaded).
+ */
+export function nightsSeenOf(signals) {
+  let nights = null;
+  for (const s of signals) {
+    const first = Date.parse(s.detected_at ?? '');
+    const last = Date.parse(s.last_detected_at ?? '');
+    if (!Number.isFinite(first) || !Number.isFinite(last)) continue;
+    const seen = Math.max(0, Math.round((last - first) / DAY_MS)) + 1;
+    nights = Math.max(nights ?? 0, seen);
+  }
+  return nights;
+}
+
+/**
+ * How many prompts an action's findings are about: every prompt its signals'
+ * and its own payloads name — a prompt id, a list of them, or prompt targets
+ * with the whole group's ids (`targetIds`, AC-009) — and at least the
+ * prompts the action counts (`targetCount` on prompts), which keeps the
+ * whole group past the ids a payload lists. Null when it names no prompt:
+ * pages, queries or platforms aren't counted here.
+ */
+export function promptBreadthOf(payloads) {
+  const ids = new Set();
+  let counted = 0;
+  for (const p of payloads) {
+    if (!p) continue;
+    if (typeof p.promptId === 'string') ids.add(p.promptId);
+    for (const id of Array.isArray(p.promptIds) ? p.promptIds : []) {
+      if (typeof id === 'string') ids.add(id);
+    }
+    if ((p.entity ?? p.targetEntity) !== 'prompts') continue;
+    for (const t of targetsOf(p)) if (typeof t.id === 'string') ids.add(t.id);
+    for (const id of Array.isArray(p.targetIds) ? p.targetIds : []) {
+      if (typeof id === 'string' && id) ids.add(id);
+    }
+    if (p.targetEntity === 'prompts' && Number.isFinite(p.targetCount)) {
+      counted = Math.max(counted, p.targetCount);
+    }
+  }
+  const breadth = Math.max(ids.size, counted);
+  return breadth > 0 ? breadth : null;
+}
+
+/**
  * Independent confirmation: distinct kinds of finding and distinct data
  * sources, never the number of signals. One kind from one source is 0.3.
+ * A finding that has held for nights on end, or across many prompts, is
+ * surer too (config `confidenceNights…`, `confidenceBreadth…`).
  */
-function confidenceOf(signals) {
+export function confidenceOf(signals, payloads = signals.map((s) => s.payload)) {
   const kinds = new Set(signals.map((s) => s.kind));
   const sources = new Set(signals.flatMap((s) => (Array.isArray(s.source) ? s.source : [])));
+  const nights = nightsSeenOf(signals);
+  // With no finding open, there's no finding to be wide.
+  const breadth = signals.length ? promptBreadthOf(payloads) : null;
+  const persistence =
+    nights === null
+      ? 0
+      : nights >= P.confidenceNightsMany
+        ? P.confidencePersistMany
+        : nights >= P.confidenceNightsSome
+          ? P.confidencePersistSome
+          : 0;
+  const wide = breadth !== null && breadth >= P.confidenceBreadthPrompts;
   const value = clamp(
-    0.3 + 0.2 * Math.max(kinds.size - 1, 0) + 0.2 * Math.max(sources.size - 1, 0),
+    0.3 +
+      0.2 * Math.max(kinds.size - 1, 0) +
+      0.2 * Math.max(sources.size - 1, 0) +
+      persistence +
+      (wide ? P.confidenceBreadthBonus : 0),
   );
-  return { value, kinds: kinds.size, sources: sources.size };
+  return { value, kinds: kinds.size, sources: sources.size, nights, breadth };
 }
 
 /**
@@ -553,7 +621,7 @@ export function priorityLevel(score) {
  * @param {{ kind: string, category: string, impact: string, payload?: object, created_at?: string }} input.action
  *   An action, or a candidate shaped like one.
  * @param {Array<{ kind: string, impact?: string, source?: string[], payload?: object,
- *   detected_at?: string, current_value?: number|null }>} input.signals
+ *   detected_at?: string, last_detected_at?: string, current_value?: number|null }>} input.signals
  *   Its open signals: the evidence it rests on now.
  * @param {Map<string, { volume: number|null, intent: string|null, level?: string|null }>} [input.prompts]
  *   Demand, intent and measured demand level of the prompts the evidence names.
@@ -590,8 +658,8 @@ export function scorePriority(
   const demand = real.floor === null ? scaled.demand : Math.max(scaled.demand ?? 0, real.floor);
 
   const confidence = byHand
-    ? { value: byHand.confidence, kinds: 0, sources: 0 }
-    : confidenceOf(signals);
+    ? { value: byHand.confidence, kinds: 0, sources: 0, nights: null, breadth: null }
+    : confidenceOf(signals, payloads);
 
   let recoverability = CATEGORY_RECOVERABILITY[action.category] ?? 0.6;
   if (byHand) recoverability = byHand.recoverability;
@@ -655,6 +723,11 @@ export function scorePriority(
       days: signals.length ? Math.floor(days) : null,
       kinds: confidence.kinds,
       sources: confidence.sources,
+      // The most nights a finding behind it was seen in a row, and how many
+      // prompts its findings are about: the confidence's other evidence.
+      // Null for an action a person sent, or with nothing to count.
+      nights: confidence.nights,
+      breadth: confidence.breadth,
       // How its kind did here before (learning B4); null with nothing to go on.
       pastSuccess: past.results
         ? {

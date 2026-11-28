@@ -59,6 +59,13 @@ describe('LowConfidenceTag (AC-26)', () => {
     expect(onRow).not.toHaveBeenCalled();
   });
 
+  it('says how many nights in a row and across how many prompts it was seen', () => {
+    render(low({ score: 0.4, nights: 4, breadth: 3 }));
+    expect(container.querySelector('button')!.getAttribute('aria-label')).toBe(
+      'Single source: Based on one kind of finding from one source, seen on 4 nights in a row across 3 prompts. Google Analytics, Search Console or a site audit can add a second kind of evidence. This is one part of the score; impact and demand still rank it.',
+    );
+  });
+
   it('says an action sent by a person was rated from what it was sent with', () => {
     render(low({ kinds: 0, sources: 0 }));
     expect(container.querySelector('button')!.getAttribute('aria-label')).toBe(

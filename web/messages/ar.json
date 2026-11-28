@@ -2238,6 +2238,7 @@
             "medium": "مؤكَّد",
             "high": "مؤكَّد بقوة",
             "found": "{kinds, plural, zero {لا توجد نتائج} one {نوع واحد من النتائج} two {نوعان من النتائج} few {# أنواع من النتائج} many {# نوعًا من النتائج} other {# نوع من النتائج}}{sources, plural, =0 {} one { من مصدر واحد} two { من مصدرين} few { من # مصادر} many { من # مصدرًا} other { من # مصدر}}",
+            "held": "{found}{nights, plural, =0 {} zero {} one {، رُصدت ليلة واحدة} two {، رُصدت ليلتين متتاليتين} few {، رُصدت # ليالٍ متتالية} many {، رُصدت # ليلة متتالية} other {، رُصدت # ليلة متتالية}}{prompts, plural, =0 {} zero {} one { في Prompt واحد} two { عبر اثنين من Prompts} few { عبر # Prompts} many { عبر # Prompt} other { عبر # Prompt}}",
             "sent": "تم التقييم استنادًا إلى ما أُرسل معه، وليس من النتائج المكتشفة"
           },
           "sentence": {

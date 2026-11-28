@@ -2238,6 +2238,7 @@
             "medium": "Bestätigt",
             "high": "Gut bestätigt",
             "found": "{kinds, plural, one {eine Art von Befund} other {# Arten von Befunden}}{sources, plural, =0 {} one { aus einer Quelle} other { aus # Quellen}}",
+            "held": "{found}{nights, plural, =0 {} one {, an # Nacht gesehen} other {, an # Nächten in Folge gesehen}}{prompts, plural, =0 {} one { bei # Prompt} other { über # Prompts hinweg}}",
             "sent": "bewertet anhand der übermittelten Daten, nicht anhand erkannter Befunde"
           },
           "sentence": {

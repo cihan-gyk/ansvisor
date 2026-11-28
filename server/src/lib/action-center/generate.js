@@ -383,7 +383,7 @@ export async function generateActionsForBrand(brandId, { now = new Date(), sourc
   const { data: openSignals, error: signalsErr } = await supabaseAdmin
     .from('signals')
     .select(
-      'id, kind, impact, kpi_keys, payload, previous_value, current_value, change_value, action_id, source, detected_at',
+      'id, kind, impact, kpi_keys, payload, previous_value, current_value, change_value, action_id, source, detected_at, last_detected_at',
     )
     .eq('brand_id', brandId)
     .in('status', ['new', 'acknowledged'])

@@ -2238,6 +2238,7 @@
             "medium": "Potwierdzone",
             "high": "Dobrze potwierdzone",
             "found": "{kinds, plural, one {jeden rodzaj ustaleń} few {# rodzaje ustaleń} many {# rodzajów ustaleń} other {# rodzaju ustaleń}}{sources, plural, =0 {} one { z jednego źródła} few { z # źródeł} many { z # źródeł} other { z # źródła}}",
+            "held": "{found}{nights, plural, =0 {} one {, widziane przez # noc} few {, widziane przez # noce z rzędu} many {, widziane przez # nocy z rzędu} other {, widziane przez # nocy z rzędu}}{prompts, plural, =0 {} one { w # Prompcie} few { w # Promptach} many { w # Promptach} other { w # Promptach}}",
             "sent": "oceniono na podstawie przesłanych danych, a nie wykrytych ustaleń"
           },
           "sentence": {

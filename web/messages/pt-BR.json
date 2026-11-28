@@ -2238,6 +2238,7 @@
             "medium": "Confirmado",
             "high": "Bem confirmado",
             "found": "{kinds, plural, one {um tipo de achado} other {# tipos de achado}}{sources, plural, =0 {} one { de uma fonte} other { de # fontes}}",
+            "held": "{found}{nights, plural, =0 {} one {, visto em # noite} other {, visto em # noites seguidas}}{prompts, plural, =0 {} one { em # Prompt} other { em # Prompts}}",
             "sent": "avaliado a partir do que foi enviado, não de achados detectados"
           },
           "sentence": {

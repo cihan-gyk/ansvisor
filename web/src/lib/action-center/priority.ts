@@ -64,8 +64,10 @@ export type ConfidenceLevel = 'low' | 'medium' | 'high';
 /**
  * The score's confidence factor as the server weighs it (priority.js
  * `confidenceOf`): 0.3 for one kind of finding from one source, 0.2 more for
- * each further kind and each further source; an action a person sent carries
- * its own. Read as a level and why, never as the bare number.
+ * each further kind and each further source, 0.1 or 0.2 more for a finding
+ * seen for 3 or 7 nights, and 0.1 more across 5 prompts or more; an action a
+ * person sent carries its own. Read as a level and why, never as the bare
+ * number.
  */
 export interface PriorityConfidence {
   level: ConfidenceLevel;
@@ -74,6 +76,13 @@ export interface PriorityConfidence {
   /** Kinds of finding and data sources behind it; none for an action a person sent. */
   kinds: number;
   sources: number;
+  /**
+   * The most nights a finding behind it was seen in a row, and how many
+   * prompts its findings are about. Null with nothing to count, for an
+   * action a person sent, or from a scorer before they were kept.
+   */
+  nights?: number | null;
+  breadth?: number | null;
 }
 
 /** A 0–1 confidence's level: High from 0.7, Medium from 0.5, else Low. */
@@ -89,17 +98,30 @@ function confidenceOf(r: Record<string, unknown>): PriorityConfidence | null {
   const score = factors.confidence;
   if (typeof score !== 'number' || !Number.isFinite(score)) return null;
   const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const atLeastOne = (v: unknown) =>
+    typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : null;
   return {
     level: confidenceLevelOf(score),
     score,
     kinds: count(r.kinds),
     sources: count(r.sources),
+    nights: atLeastOne(r.nights),
+    breadth: atLeastOne(r.breadth),
   };
 }
 
 /**
+ * The nights and prompts worth saying in the confidence's why: more than one
+ * of each, as one night or one prompt adds nothing to it. 0 leaves it out.
+ */
+function heldFor(confidence: PriorityConfidence) {
+  const more = (n: number | null | undefined) => (n && n >= 2 ? n : 0);
+  return { nights: more(confidence.nights), prompts: more(confidence.breadth) };
+}
+
+/**
  * Why the confidence is what it is, in English, for the MCP server: "one kind
- * of finding from one source".
+ * of finding from one source, seen on 9 nights in a row across 12 prompts".
  */
 export function confidenceNote(confidence: PriorityConfidence): string {
   const count = (n: number, one: string, many: string) => (n === 1 ? `one ${one}` : `${n} ${many}`);
@@ -107,9 +129,14 @@ export function confidenceNote(confidence: PriorityConfidence): string {
     return 'rated from what the action was sent with, not from detected findings';
   }
   const kinds = count(confidence.kinds, 'kind of finding', 'kinds of finding');
-  return confidence.sources > 0
-    ? `${kinds} from ${count(confidence.sources, 'source', 'sources')}`
-    : kinds;
+  const found =
+    confidence.sources > 0
+      ? `${kinds} from ${count(confidence.sources, 'source', 'sources')}`
+      : kinds;
+  const { nights, prompts } = heldFor(confidence);
+  return `${found}${nights ? `, seen on ${nights} nights in a row` : ''}${
+    prompts ? ` across ${prompts} prompts` : ''
+  }`;
 }
 
 /** Days New with no one's event before an action is stale: the server's staleAfterDays (config/action-engine.js). */
@@ -368,13 +395,24 @@ export function priorityReasonText(reason: PriorityReason, t: Translator): strin
   return t('reason.sentence.end', { text });
 }
 
+/**
+ * Why a confidence found in detected findings is what it is: "one kind of
+ * finding from one source, seen on 9 nights in a row across 12 prompts".
+ * The nights and prompts only when there's more than one of each.
+ */
+export function confidenceFoundText(confidence: PriorityConfidence, t: Translator): string {
+  const found = t('reason.confidence.found', {
+    kinds: confidence.kinds,
+    sources: confidence.sources,
+  });
+  const { nights, prompts } = heldFor(confidence);
+  return nights || prompts ? t('reason.confidence.held', { found, nights, prompts }) : found;
+}
+
 /** "Single source — one kind of finding from one source." */
 export function priorityConfidenceText(confidence: PriorityConfidence, t: Translator): string {
   return t('reason.confidence.line', {
     level: t(`reason.confidence.${confidence.level}`),
-    why:
-      confidence.kinds > 0
-        ? t('reason.confidence.found', { kinds: confidence.kinds, sources: confidence.sources })
-        : t('reason.confidence.sent'),
+    why: confidence.kinds > 0 ? confidenceFoundText(confidence, t) : t('reason.confidence.sent'),
   });
 }

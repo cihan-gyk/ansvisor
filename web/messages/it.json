@@ -2238,6 +2238,7 @@
             "medium": "Confermato",
             "high": "Ben confermato",
             "found": "{kinds, plural, one {un tipo di riscontro} other {# tipi di riscontro}}{sources, plural, =0 {} one { da una fonte} other { da # fonti}}",
+            "held": "{found}{nights, plural, =0 {} one {, rilevato per # notte} other {, rilevato per # notti di fila}}{prompts, plural, =0 {} one { su # prompt} other { su # prompt}}",
             "sent": "valutato in base a ciò con cui è stato inviato, non dai riscontri rilevati"
           },
           "sentence": {
